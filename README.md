@@ -63,11 +63,15 @@ system calls appropriate to the selected target.
   an address: its current value must be a mapped, readable pointer. An integer
   like `9` is not a valid memory address just because it is in a register.
   Choose bytes, 32-bit words, or 64-bit words; word displays are little-endian.
+- The **Stack** view below the Memory inspector automatically shows the first
+  10 32-bit words from the current stack pointer whenever execution stops.
+- The **Disassembly** tab shows the full function containing the current
+  instruction when execution stops, including GDB's current-instruction marker.
 - Register views include hexadecimal, unsigned, signed, and binary formats.
   The register filter accepts comma-separated names (for example, `x0, sp,
-  lr`); leave it empty to show all registers. Filter names are remembered
-  between launches. Changed registers are highlighted, and condition flags
-  are displayed.
+  lr`); `lr` also matches `x30` on AArch64 and `r14` on ARM. Leave it empty to
+  show all registers. Filter names are remembered between launches. Changed
+  registers are highlighted, and condition flags are displayed.
 - Assembler errors are highlighted in the **Build** tab; click one to jump to
   its source line.
 

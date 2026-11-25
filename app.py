@@ -94,6 +94,10 @@ TARGETS = {
         "stack_pointer": "$rsp",
     },
 }
+REGISTER_FILTER_ALIASES = {
+    "AArch64": {"lr": ("lr", "x30")},
+    "ARM 32-bit": {"lr": ("lr", "r14")},
+}
 
 
 def settings_file_path() -> Path:
@@ -169,6 +173,8 @@ class AssemblyWorkbench:
         self.pending_breakpoint_lines: set[int] = set()
         self.pending_gdb_actions: dict[str, tuple] = {}
         self.gdb_token = 0
+        self.disassembly_capture_token: str | None = None
+        self.disassembly_capture: list[str] = []
         self.continue_mode = False
         self.pause_requested = False
         self.is_dirty = False
@@ -187,6 +193,11 @@ class AssemblyWorkbench:
             "Memory is read automatically from the stack pointer when execution stops.\n"
             "Enter a register or address and click Read. A register is treated as a pointer;\n"
             "its value must point to readable memory.",
+        )
+        self._set_text(
+            self.stack_view,
+            "Stack view needs a Build + Debug session.\n"
+            "It shows 10 32-bit words from the current stack pointer.",
         )
         self._apply_theme()
         self._apply_font()
@@ -334,8 +345,9 @@ class AssemblyWorkbench:
         self.flags_label.pack(side=tk.BOTTOM, fill=tk.X)
         state_top.add(registers_frame, weight=1)
 
-        stack_frame = ttk.LabelFrame(state_top, text="Memory inspector")
-        memory_controls = ttk.Frame(stack_frame)
+        memory_stack = ttk.Panedwindow(state_top, orient=tk.VERTICAL)
+        memory_frame = ttk.LabelFrame(memory_stack, text="Memory inspector")
+        memory_controls = ttk.Frame(memory_frame)
         memory_controls.pack(side=tk.TOP, fill=tk.X, padx=4, pady=3)
         ttk.Label(memory_controls, text="Address").pack(side=tk.LEFT)
         self.memory_address = tk.StringVar(
@@ -353,16 +365,16 @@ class AssemblyWorkbench:
             state="readonly",
         ).pack(side=tk.LEFT, padx=3)
         ttk.Button(memory_controls, text="Read", command=self._read_memory).pack(side=tk.LEFT)
-        stack_scroll = ttk.Scrollbar(stack_frame, orient=tk.VERTICAL)
+        stack_scroll = ttk.Scrollbar(memory_frame, orient=tk.VERTICAL)
         stack_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         memory_horizontal_scroll = ttk.Scrollbar(
-            stack_frame, orient=tk.HORIZONTAL
+            memory_frame, orient=tk.HORIZONTAL
         )
         memory_horizontal_scroll.pack(side=tk.BOTTOM, fill=tk.X)
         self.stack = tk.Text(
-            stack_frame,
+            memory_frame,
             wrap=tk.NONE,
-            height=15,
+            height=8,
             font=("monospace", 10),
             state=tk.DISABLED,
             yscrollcommand=stack_scroll.set,
@@ -371,7 +383,31 @@ class AssemblyWorkbench:
         self.stack.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         stack_scroll.configure(command=self.stack.yview)
         memory_horizontal_scroll.configure(command=self.stack.xview)
-        state_top.add(stack_frame, weight=1)
+        memory_stack.add(memory_frame, weight=2)
+
+        stack_view_frame = ttk.LabelFrame(
+            memory_stack, text="Stack (10 x 32-bit words from SP)"
+        )
+        stack_view_scroll = ttk.Scrollbar(stack_view_frame, orient=tk.VERTICAL)
+        stack_view_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        stack_view_horizontal_scroll = ttk.Scrollbar(
+            stack_view_frame, orient=tk.HORIZONTAL
+        )
+        stack_view_horizontal_scroll.pack(side=tk.BOTTOM, fill=tk.X)
+        self.stack_view = tk.Text(
+            stack_view_frame,
+            wrap=tk.NONE,
+            height=5,
+            font=("monospace", 10),
+            state=tk.DISABLED,
+            yscrollcommand=stack_view_scroll.set,
+            xscrollcommand=stack_view_horizontal_scroll.set,
+        )
+        self.stack_view.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        stack_view_scroll.configure(command=self.stack_view.yview)
+        stack_view_horizontal_scroll.configure(command=self.stack_view.xview)
+        memory_stack.add(stack_view_frame, weight=1)
+        state_top.add(memory_stack, weight=1)
 
         state_top.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
         right.add(state_frame, weight=3)
@@ -546,6 +582,7 @@ class AssemblyWorkbench:
         )
         for widget in (
             self.stack,
+            self.stack_view,
             self.build_output,
             self.program_output,
             self.debug_output,
@@ -580,6 +617,7 @@ class AssemblyWorkbench:
         self.editor.configure(font=editor_font)
         for widget in (
             self.stack,
+            self.stack_view,
             self.build_output,
             self.program_output,
             self.debug_output,
@@ -1256,6 +1294,8 @@ class AssemblyWorkbench:
         self.installed_breakpoints.clear()
         self.pending_breakpoint_lines.clear()
         self.pending_gdb_actions.clear()
+        self.disassembly_capture_token = None
+        self.disassembly_capture.clear()
         self.register_raw_values.clear()
         self.changed_registers.clear()
         self._render_registers()
@@ -1266,6 +1306,11 @@ class AssemblyWorkbench:
             self.stack,
             "Waiting for GDB to stop.\n"
             "The inspector will read 128 bytes from the stack pointer automatically.",
+        )
+        self._set_text(
+            self.stack_view,
+            "Waiting for GDB to stop.\n"
+            "The stack view will show 10 32-bit words from the stack pointer.",
         )
         self._set_text(self.disassembly_output, "")
         self._append(
@@ -1316,6 +1361,11 @@ class AssemblyWorkbench:
             self.stack,
             "Run mode does not attach GDB.\n"
             "Use Build + Debug to inspect memory.",
+        )
+        self._set_text(
+            self.stack_view,
+            "Run mode does not attach GDB.\n"
+            "Use Build + Debug to inspect the stack.",
         )
         self.output_tabs.select(self.program_output.master)
         emulator = str(TARGETS[target_name]["qemu"])
@@ -1450,6 +1500,33 @@ class AssemblyWorkbench:
             self._set_text(self.stack, f"Reading 128 bytes from {address}…")
             self.status.configure(text=f"Reading memory at {address}…")
 
+    def _read_stack(self) -> None:
+        if self.gdb is None:
+            return
+        stack_pointer = TARGETS[self.target_name]["stack_pointer"]
+        token = self._send_gdb(
+            f"-data-read-memory-bytes {stack_pointer} 40",
+            action=("stack", stack_pointer),
+        )
+        if token is not None:
+            self._set_text(self.stack_view, f"Reading 10 32-bit words from {stack_pointer}…")
+
+    def _read_current_function_disassembly(self) -> None:
+        self.disassembly_capture.clear()
+        self.disassembly_capture_token = None
+        self._set_text(self.disassembly_output, "Reading current function disassembly…\n")
+        token = self._send_gdb(
+            '-interpreter-exec console "disassemble"',
+            action=("disassembly",),
+        )
+        if token is not None:
+            self.disassembly_capture_token = token
+        else:
+            self._set_text(
+                self.disassembly_output,
+                "Could not request disassembly. See the Debugger tab for details.\n",
+            )
+
     def stop_debugger(self) -> None:
         for proc in (self.gdb, self.qemu):
             if proc is not None and proc.poll() is None:
@@ -1460,6 +1537,8 @@ class AssemblyWorkbench:
         self.gdb = None
         self.qemu = None
         self.pending_gdb_actions.clear()
+        self.disassembly_capture_token = None
+        self.disassembly_capture.clear()
         self.pending_breakpoint_lines.clear()
         self.installed_breakpoints.clear()
 
@@ -1557,7 +1636,9 @@ class AssemblyWorkbench:
                 readable = json.loads(stripped[1:])
             except json.JSONDecodeError:
                 readable = stripped
-            if not self.continue_mode:
+            if self.disassembly_capture_token is not None:
+                self.disassembly_capture.append(readable)
+            elif not self.continue_mode:
                 self._append(self.debug_output, readable)
         elif (
             stripped
@@ -1596,7 +1677,8 @@ class AssemblyWorkbench:
             )
             self._send_gdb("-data-list-register-values x")
             self._read_memory(automatic=True)
-            self._send_gdb('-data-disassemble -s $pc -e "$pc+64" -- 0')
+            self._read_stack()
+            self._read_current_function_disassembly()
             self._send_gdb("-stack-info-frame")
             self._sync_breakpoints()
 
@@ -1625,6 +1707,18 @@ class AssemblyWorkbench:
                 self.status.configure(
                     text=f"Memory read failed at {action[1]} — check that it is a valid pointer"
                 )
+            elif action and action[0] == "stack":
+                self._append(self.debug_output, f"Stack read failed: {result}\n")
+                self._set_text(self.stack_view, f"Could not read the stack at {action[1]}.\n{result}")
+                self.status.configure(text="Stack read failed — see Debugger output")
+            elif action and action[0] == "disassembly":
+                self.disassembly_capture_token = None
+                self.disassembly_capture.clear()
+                self._set_text(
+                    self.disassembly_output,
+                    f"Could not disassemble the current function.\n{result}\n",
+                )
+                self.status.configure(text="Disassembly failed — see Disassembly tab")
             else:
                 self.status.configure(text="GDB reported an error — see Debugger output")
             return
@@ -1645,12 +1739,6 @@ class AssemblyWorkbench:
                 self._show_registers(self._parse_mi_array(values_match.group(1)))
             except json.JSONDecodeError:
                 self._append(self.debug_output, "Could not parse register values from GDB.\n")
-        asm_match = re.search(r"asm_insns=(\[[\s\S]*\])$", result)
-        if asm_match:
-            try:
-                self._show_disassembly(self._parse_mi_array(asm_match.group(1)))
-            except json.JSONDecodeError:
-                self._append(self.debug_output, "Could not parse disassembly from GDB.\n")
         frame_match = re.search(r"frame=\{([\s\S]*)\}$", result)
         if frame_match:
             frame = frame_match.group(1)
@@ -1668,6 +1756,26 @@ class AssemblyWorkbench:
                     self._set_current_source_line(None)
 
     def _handle_gdb_action(self, action: tuple, result: str) -> None:
+        if action[0] == "disassembly":
+            output = "".join(self.disassembly_capture)
+            self.disassembly_capture.clear()
+            self.disassembly_capture_token = None
+            self._show_disassembly(output)
+            return
+        if action[0] == "stack":
+            memory_match = re.search(r"memory=(\[[\s\S]*\])$", result)
+            if memory_match:
+                try:
+                    memory = self._parse_mi_array(memory_match.group(1))
+                    self._show_stack(memory)
+                except (json.JSONDecodeError, ValueError) as exc:
+                    self._append(self.debug_output, f"Could not parse stack memory from GDB: {exc}\n")
+                    self._set_text(self.stack_view, f"Could not parse stack memory returned by GDB.\n{exc}")
+            else:
+                message = "GDB returned no stack data. Make sure the debug session is stopped."
+                self._append(self.debug_output, message + "\n")
+                self._set_text(self.stack_view, message)
+            return
         if action[0] == "memory":
             memory_match = re.search(r"memory=(\[[\s\S]*\])$", result)
             if memory_match:
@@ -1738,6 +1846,9 @@ class AssemblyWorkbench:
             for name in self.register_filter.get().split(",")
             if name.strip()
         }
+        for names in REGISTER_FILTER_ALIASES.get(self.target_name, {}).values():
+            if filter_names.intersection(names):
+                filter_names.update(names)
         for name, raw_value in self.register_raw_values.items():
             if filter_names and name.casefold() not in filter_names:
                 continue
@@ -1763,7 +1874,7 @@ class AssemblyWorkbench:
 
     def _format_register_value(self, name: str, value: str, mode: str = "Hex") -> str:
         if self.target_name == "AArch64":
-            if re.fullmatch(r"(?:x\d+|xzr|sp|pc)", name):
+            if re.fullmatch(r"(?:x\d+|xzr|sp|pc|lr)", name):
                 bits = 64
             elif re.fullmatch(r"(?:w\d+|wzr|wsp|cpsr)", name):
                 bits = 32
@@ -1832,15 +1943,28 @@ class AssemblyWorkbench:
         output += "\n".join(rows) if rows else "No readable bytes were returned."
         self._set_text(self.stack, output + ("\n" if rows else ""))
 
-    def _show_disassembly(self, instructions: list[dict[str, str]]) -> None:
-        rows = []
-        for item in instructions:
-            address = item.get("address", "")
-            function = item.get("func-name")
-            if function:
-                rows.append(f"<{function}>:")
-            rows.append(f"{address:>18}  {item.get('inst', '')}")
-        self._set_text(self.disassembly_output, "\n".join(rows) + ("\n" if rows else ""))
+    def _show_stack(self, memory: list[dict[str, str]]) -> None:
+        rows: list[str] = []
+        for block in memory:
+            address = int(block.get("begin", "0"), 16)
+            contents = bytes.fromhex(block.get("contents", ""))
+            for offset in range(0, len(contents), 16):
+                chunk = contents[offset : offset + 16]
+                words = [
+                    f"0x{int.from_bytes(chunk[position : position + 4], 'little'):08x}"
+                    for position in range(0, len(chunk) - 3, 4)
+                ]
+                if words:
+                    rows.append(f"0x{address + offset:016x}  {' '.join(words)}")
+        output = "10 x 32-bit words from the current stack pointer\n"
+        output += "\n".join(rows) if rows else "No readable stack words were returned."
+        self._set_text(self.stack_view, output + ("\n" if rows else ""))
+
+    def _show_disassembly(self, output: str) -> None:
+        if output.strip():
+            self._set_text(self.disassembly_output, output)
+        else:
+            self._set_text(self.disassembly_output, "GDB returned no function disassembly.\n")
 
     @staticmethod
     def _mi_quote(value: str) -> str:
