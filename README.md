@@ -73,9 +73,5 @@ offers light/dark themes and font controls. Preferences are stored in
 `$XDG_CONFIG_HOME/aarch64-assembly-workbench/settings.json` (normally
 `~/.config/aarch64-assembly-workbench/settings.json`).
 
-The **Terminal** tab opens an embedded Bash shell in the source file's
-directory. It supports command input and Ctrl-C via **Interrupt**; it is a
-line-oriented PTY view, not a full ANSI terminal emulator.
-
 Shortcuts: Ctrl+S save, Ctrl+O open, Ctrl+N new, Ctrl+F find/replace, Ctrl+G go
 to line, Ctrl+/ comment/uncomment, Ctrl+Z undo, and Ctrl+Y redo.

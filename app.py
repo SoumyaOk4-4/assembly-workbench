@@ -4,13 +4,10 @@
 from __future__ import annotations
 
 import codecs
-import errno
 import json
 import os
-import pty
 import queue
 import re
-import signal
 import socket
 import subprocess
 import sys
@@ -169,9 +166,6 @@ class AssemblyWorkbench:
         self.pending_breakpoint_lines: set[int] = set()
         self.pending_gdb_actions: dict[str, tuple] = {}
         self.gdb_token = 0
-        self.terminal_pid: int | None = None
-        self.terminal_fd: int | None = None
-        self.terminal_thread: threading.Thread | None = None
         self.continue_mode = False
         self.pause_requested = False
         self.is_dirty = False
@@ -378,8 +372,6 @@ class AssemblyWorkbench:
         self.program_output = self._add_output_tab("Program")
         self.debug_output = self._add_output_tab("Debugger")
         self.disassembly_output = self._add_output_tab("Disassembly")
-        self.terminal_output, self.terminal_entry = self._add_terminal_tab()
-        self.output_tabs.bind("<<NotebookTabChanged>>", self._on_output_tab_changed)
         self.output_tabs.pack(fill=tk.BOTH, expand=True)
         right.add(output_frame, weight=2)
 
@@ -401,117 +393,6 @@ class AssemblyWorkbench:
             text.tag_configure("source_error", foreground="#d00000", underline=True)
             text.tag_bind("source_error", "<Button-1>", self._jump_to_build_error)
         return text
-
-    def _add_terminal_tab(self) -> tuple[tk.Text, ttk.Entry]:
-        frame = ttk.Frame(self.output_tabs)
-        output = tk.Text(frame, wrap=tk.WORD, height=9, font=("monospace", 10), state=tk.DISABLED)
-        scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=output.yview)
-        output.configure(yscrollcommand=scrollbar.set)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        output.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        controls = ttk.Frame(frame, padding=4)
-        controls.pack(side=tk.BOTTOM, fill=tk.X)
-        entry = ttk.Entry(controls)
-        entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        entry.bind("<Return>", self._send_terminal_input)
-        ttk.Button(controls, text="Send", command=self._send_terminal_input).pack(
-            side=tk.LEFT, padx=(4, 0)
-        )
-        ttk.Button(controls, text="Interrupt", command=self._interrupt_terminal).pack(
-            side=tk.LEFT, padx=(4, 0)
-        )
-        self.output_tabs.add(frame, text="Terminal")
-        return output, entry
-
-    def _on_output_tab_changed(self, _event: tk.Event) -> None:
-        if self.output_tabs.select() == str(self.terminal_output.master):
-            self._start_terminal()
-
-    def _start_terminal(self) -> None:
-        if self.terminal_pid is not None:
-            return
-        try:
-            pid, master_fd = pty.fork()
-        except OSError as exc:
-            self._append(self.terminal_output, f"Could not start shell: {exc}\n")
-            return
-        if pid == 0:
-            try:
-                if self.source_path is not None:
-                    os.chdir(self.source_path.parent)
-                environment = os.environ.copy()
-                environment.update(TERM="dumb", PS1="asm> ", PS2="> ")
-                os.execvpe("bash", ["bash", "--noprofile", "--norc", "-i"], environment)
-            except OSError as exc:
-                os.write(2, f"Could not start bash: {exc}\n".encode())
-                os._exit(127)
-        self.terminal_pid = pid
-        self.terminal_fd = master_fd
-        self._append(self.terminal_output, f"Shell started in {Path.cwd() if self.source_path is None else self.source_path.parent}\n")
-        self.terminal_thread = threading.Thread(
-            target=self._read_terminal, args=(pid, master_fd), daemon=True
-        )
-        self.terminal_thread.start()
-        self.terminal_entry.focus_set()
-
-    def _read_terminal(self, pid: int, master_fd: int) -> None:
-        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-        try:
-            while True:
-                chunk = os.read(master_fd, 4096)
-                if not chunk:
-                    break
-                text = decoder.decode(chunk)
-                if text:
-                    self.events.put(("terminal_output", pid, text))
-        except OSError as exc:
-            if exc.errno not in (errno.EIO, errno.EBADF):
-                self.events.put(("terminal_output", pid, f"\nTerminal read failed: {exc}\n"))
-        finally:
-            try:
-                os.close(master_fd)
-            except OSError:
-                pass
-        remaining = decoder.decode(b"", final=True)
-        if remaining:
-            self.events.put(("terminal_output", pid, remaining))
-        try:
-            os.waitpid(pid, 0)
-        except ChildProcessError:
-            pass
-        self.events.put(("terminal_done", pid))
-
-    def _send_terminal_input(self, _event: tk.Event | None = None) -> str:
-        if self.terminal_pid is None or self.terminal_fd is None:
-            self._start_terminal()
-        if self.terminal_fd is not None:
-            command = self.terminal_entry.get()
-            try:
-                os.write(self.terminal_fd, (command + "\n").encode())
-                self.terminal_entry.delete(0, tk.END)
-            except OSError as exc:
-                self._append(self.terminal_output, f"\nTerminal input failed: {exc}\n")
-        return "break"
-
-    def _interrupt_terminal(self) -> None:
-        if self.terminal_fd is None:
-            return
-        try:
-            os.write(self.terminal_fd, b"\x03")
-        except OSError as exc:
-            self._append(self.terminal_output, f"\nTerminal interrupt failed: {exc}\n")
-
-    def _stop_terminal(self) -> None:
-        pid = self.terminal_pid
-        self.terminal_pid = None
-        self.terminal_fd = None
-        if pid is not None:
-            try:
-                os.killpg(pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            except OSError as exc:
-                self._append(self.terminal_output, f"Could not stop shell: {exc}\n")
 
     def _apply_theme(self) -> None:
         self.colors = THEME_COLORS[self.theme]
@@ -647,8 +528,13 @@ class AssemblyWorkbench:
             highlightcolor=self.colors["register"],
             borderwidth=0,
         )
-        for widget in (self.stack, self.build_output, self.program_output, self.debug_output,
-                       self.disassembly_output, self.terminal_output):
+        for widget in (
+            self.stack,
+            self.build_output,
+            self.program_output,
+            self.debug_output,
+            self.disassembly_output,
+        ):
             widget.configure(
                 background=self.colors["editor"],
                 foreground=self.colors["foreground"],
@@ -676,8 +562,13 @@ class AssemblyWorkbench:
         editor_font = (self.font_family, self.font_size)
         output_font = (self.font_family, max(8, self.font_size - 2))
         self.editor.configure(font=editor_font)
-        for widget in (self.stack, self.build_output, self.program_output, self.debug_output,
-                       self.disassembly_output, self.terminal_output):
+        for widget in (
+            self.stack,
+            self.build_output,
+            self.program_output,
+            self.debug_output,
+            self.disassembly_output,
+        ):
             widget.configure(font=output_font)
         self._draw_line_numbers()
 
@@ -1610,7 +1501,7 @@ class AssemblyWorkbench:
                 self._send_gdb(f"-file-exec-and-symbols {self._mi_quote(str(binary))}")
                 self._send_gdb(f"-target-select remote localhost:{port}")
                 self._send_gdb("-data-list-register-names")
-                self.status.configure(text=f"Connected to {target_name} — use Step or Continue")
+                self.status.configure(text=f"Connected to {target_name} — use Step")
             elif kind == "process_line":
                 _, process_name, line = event
                 if process_name == "gdb":
@@ -1627,16 +1518,6 @@ class AssemblyWorkbench:
                     self.runner = None
                     self._append(self.program_output, f"\nProgram exited with status {return_code}\n")
                     self.status.configure(text=f"Program exited with status {return_code}")
-            elif kind == "terminal_output":
-                _, pid, text = event
-                if pid == self.terminal_pid:
-                    self._append(self.terminal_output, text)
-            elif kind == "terminal_done":
-                _, pid = event
-                if pid == self.terminal_pid:
-                    self.terminal_pid = None
-                    self.terminal_fd = None
-                    self._append(self.terminal_output, "\nShell exited.\n")
         self.root.after(50, self._drain_events)
 
     def _start_reader(self, proc: subprocess.Popen[str], name: str) -> None:
@@ -1964,7 +1845,6 @@ class AssemblyWorkbench:
             self.highlight_id = None
         self.closed = True
         self.stop_execution()
-        self._stop_terminal()
         self._save_preferences()
         self.root.destroy()
 
