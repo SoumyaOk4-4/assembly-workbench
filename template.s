@@ -9,7 +9,6 @@ _start:
     add x2, x0, x1 // add the two numbers and store the result in x2
 
     // exit the program
-    mov x8, #93
-    mov x0, #0
-    mov x1, #0
+    mov x8, #93 // syscall number for exit
+    mov x0, #0  // exit status code
     svc #0

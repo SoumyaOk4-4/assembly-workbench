@@ -40,36 +40,47 @@ system calls appropriate to the selected target.
 
 ## Build, run, and debug
 
-- **Build** assembles and links the current source.
-- **Run** builds and executes normally under QEMU; program output appears in
-  the **Program** tab.
-- **Build + Debug** builds and connects `gdb-multiarch` to QEMU.
-- Click the editor gutter to set or remove a source breakpoint. **Step**
-  advances one instruction during a debugging session.
+- **New** starts an empty source file. **Open** chooses a source file, and
+  **Save** writes the current file (asking for a filename if it is untitled).
+- **Build** assembles and links the source; messages appear in the **Build**
+  tab. **Run** builds and executes it under QEMU, with output in **Program**.
+- **Build + Debug** builds and starts a QEMU/GDB debugging session. Click the
+  editor gutter to set or remove a source breakpoint; **Step** advances one
+  machine instruction while debugging.
+- **Find** opens the find-and-replace dialog. **Find next** selects the next
+  case-insensitive match, **Replace** replaces the selected match, and
+  **Replace all** replaces every case-insensitive match.
+- **Recent** lists recently opened files; choose one and click **Open**.
+  **Settings** opens theme and font controls; click **Apply** to use them.
+- **Target** selects the assembly architecture. **Go to line** moves the
+  editor cursor to a specified line, and **Comment** toggles `//` comments on
+  the current line or selected lines. **Tab spaces** sets the indentation
+  width inserted by Tab and automatic indentation.
 - The **Memory inspector** works during **Build + Debug** (Build and Run do not
   attach GDB). It automatically reads 128 bytes from the stack pointer when
-  execution stops; enter a register, `&symbol`, or numeric address and click
-  **Read** to inspect another location. A register such as `$x0` is treated as
+  execution stops. To inspect another location, enter a register, `&symbol`,
+  or numeric address and click **Read**. A register such as `$x0` is treated as
   an address: its current value must be a mapped, readable pointer. An integer
   like `9` is not a valid memory address just because it is in a register.
   Choose bytes, 32-bit words, or 64-bit words; word displays are little-endian.
 - Register views include hexadecimal, unsigned, signed, and binary formats.
-  Changed registers are highlighted, and condition flags are displayed.
+  The register filter accepts comma-separated names (for example, `x0, sp,
+  lr`); leave it empty to show all registers. Filter names are remembered
+  between launches. Changed registers are highlighted, and condition flags
+  are displayed.
 - Assembler errors are highlighted in the **Build** tab; click one to jump to
   its source line.
-
-Continue is debugger-controlled instruction stepping so it can pause
-responsively; use **Run** for normal, faster execution.
 
 ## Editor and preferences
 
 The editor includes line numbers, assembly syntax colors, auto-indent,
 configurable Tab spaces, comment/uncomment, go-to-line, find/replace, undo/redo,
 and an unsaved-changes indicator. Saved files autosave after a short pause.
+Closing with unsaved changes offers **Save and Close**, **Close Without
+Saving**, or **Cancel**. Cancel leaves the workbench open.
 
-**Recent** lists recently opened files. The app restores the last file, target,
-theme, font, indentation width, and window size between sessions. **Settings**
-offers light/dark themes and font controls. Preferences are stored in
+The app restores the last file, target, theme, font, indentation width, and
+window size between sessions. Preferences are stored in
 `$XDG_CONFIG_HOME/aarch64-assembly-workbench/settings.json` (normally
 `~/.config/aarch64-assembly-workbench/settings.json`).
 

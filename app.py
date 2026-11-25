@@ -150,6 +150,9 @@ class AssemblyWorkbench:
         ):
             self.window_geometry = "1280x820"
         self.settings = preferences
+        self.register_filter_value = preferences.get("register_filter", "")
+        if not isinstance(self.register_filter_value, str):
+            self.register_filter_value = ""
         self.source_path: Path | None = source
         self.binary_path: Path | None = None
         self.autosave_id: str | None = None
@@ -304,6 +307,13 @@ class AssemblyWorkbench:
         )
         register_format_picker.pack(side=tk.LEFT, padx=4)
         register_format_picker.bind("<<ComboboxSelected>>", lambda _event: self._render_registers())
+        ttk.Label(register_controls, text="Filter").pack(side=tk.LEFT, padx=(8, 2))
+        self.register_filter = tk.StringVar(value=self.register_filter_value)
+        register_filter_entry = ttk.Entry(
+            register_controls, textvariable=self.register_filter, width=12
+        )
+        register_filter_entry.pack(side=tk.LEFT, padx=(0, 4))
+        self.register_filter.trace_add("write", lambda *_args: self._render_registers())
         register_scroll = ttk.Scrollbar(registers_frame, orient=tk.VERTICAL)
         register_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.registers = ttk.Treeview(
@@ -601,6 +611,7 @@ class AssemblyWorkbench:
             font_size=self.font_size,
             indent_width=int(self.indent_width.get()),
             target=self.target_name,
+            register_filter=self.register_filter.get(),
             recent_files=self.recent_files[:RECENT_FILE_LIMIT],
             last_file=str(self.source_path) if self.source_path else self.last_file,
             window_geometry=self.root.geometry(),
@@ -1722,7 +1733,14 @@ class AssemblyWorkbench:
 
     def _render_registers(self) -> None:
         self.registers.delete(*self.registers.get_children())
+        filter_names = {
+            name.strip().removeprefix("$").casefold()
+            for name in self.register_filter.get().split(",")
+            if name.strip()
+        }
         for name, raw_value in self.register_raw_values.items():
+            if filter_names and name.casefold() not in filter_names:
+                continue
             display_value = self._format_register_value(name, raw_value, self.register_format.get())
             tags = ("changed",) if name in self.changed_registers else ()
             self.registers.insert("", tk.END, values=(name, display_value), tags=tags)
@@ -1842,9 +1860,56 @@ class AssemblyWorkbench:
         widget.see(tk.END)
         widget.configure(state=tk.DISABLED)
 
+    def _confirm_close(self) -> str:
+        window = tk.Toplevel(self.root)
+        window.title("Unsaved changes")
+        window.transient(self.root)
+        window.resizable(False, False)
+        window.configure(background=self.colors["background"])
+        window.protocol("WM_DELETE_WINDOW", window.destroy)
+
+        content = ttk.Frame(window, padding=16)
+        content.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(content, text="Save your changes before closing?").pack(
+            anchor=tk.W, pady=(0, 14)
+        )
+
+        result = ["cancel"]
+
+        def choose(choice: str) -> None:
+            result[0] = choice
+            window.destroy()
+
+        buttons = ttk.Frame(content)
+        buttons.pack(fill=tk.X)
+        ttk.Button(buttons, text="Cancel", command=lambda: choose("cancel")).pack(
+            side=tk.RIGHT, padx=(6, 0)
+        )
+        ttk.Button(
+            buttons,
+            text="Close Without Saving",
+            command=lambda: choose("discard"),
+        ).pack(side=tk.RIGHT, padx=(6, 0))
+        save_button = ttk.Button(
+            buttons,
+            text="Save and Close",
+            command=lambda: choose("save"),
+        )
+        save_button.pack(side=tk.RIGHT)
+
+        window.bind("<Escape>", lambda _event: choose("cancel"))
+        window.grab_set()
+        save_button.focus_set()
+        window.wait_window()
+        return result[0]
+
     def close(self) -> None:
-        if self.is_dirty and not self._may_discard_or_save():
-            return
+        if self.is_dirty:
+            choice = self._confirm_close()
+            if choice == "cancel":
+                return
+            if choice == "save" and not self.save_file():
+                return
         self._cancel_autosave()
         if self.highlight_id is not None:
             self.root.after_cancel(self.highlight_id)
