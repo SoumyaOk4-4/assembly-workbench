@@ -23,6 +23,11 @@ On Debian/Ubuntu, the packages commonly needed are `binutils-aarch64-linux-gnu`,
 ./app
 ```
 
+The launcher returns to the terminal immediately; the workbench keeps running
+if you close the terminal.
+
+Without a remembered source file, the workbench opens the bundled `template.s`.
+
 Or open a source file directly:
 
 ```sh
@@ -39,10 +44,8 @@ system calls appropriate to the selected target.
 - **Run** builds and executes normally under QEMU; program output appears in
   the **Program** tab.
 - **Build + Debug** builds and connects `gdb-multiarch` to QEMU.
-- Click the editor gutter to set or remove a source breakpoint. **Continue**
-  steps through execution until a breakpoint or program exit; **Pause** stops
-  after the current instruction, and **Step** advances one instruction.
-- **Stop** terminates the current run or debugging session.
+- Click the editor gutter to set or remove a source breakpoint. **Step**
+  advances one instruction during a debugging session.
 - The **Memory inspector** works during **Build + Debug** (Build and Run do not
   attach GDB). It automatically reads 128 bytes from the stack pointer when
   execution stops; enter a register, `&symbol`, or numeric address and click

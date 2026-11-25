@@ -123,9 +123,9 @@ class AssemblyWorkbench:
         self.root = root
         self.preferences_path = preferences_path or settings_file_path()
         preferences, self.preferences_warning = read_settings(self.preferences_path)
-        self.theme = preferences.get("theme", "Light")
+        self.theme = preferences.get("theme", "Dark")
         if self.theme not in ("Light", "Dark"):
-            self.theme = "Light"
+            self.theme = "Dark"
         self.colors = THEME_COLORS[self.theme]
         self.font_family = preferences.get("font_family", "monospace")
         if self.font_family not in FONT_FAMILIES:
@@ -210,10 +210,7 @@ class AssemblyWorkbench:
             ("Build", self.build),
             ("Build + Debug", self.build_and_debug),
             ("Run", self.run),
-            ("Continue", self._continue_debugging),
-            ("Pause", self._pause_debugging),
             ("Step", self._step_instruction),
-            ("Stop", self.stop_execution),
             ("Find", self.find_replace),
             ("Recent", self.show_recent_files),
             ("Settings", self.show_settings),
@@ -1053,8 +1050,8 @@ class AssemblyWorkbench:
         try:
             content = path.read_text(encoding="utf-8")
         except OSError as exc:
-            messagebox.showerror("Open failed", str(exc), parent=self.root)
-            content = ""
+            self.status.configure(text=f"Open failed: {exc}")
+            return
         self._clear_breakpoints()
         self._set_current_source_line(None)
         self.source_path = path
@@ -1984,7 +1981,11 @@ def main() -> None:
         preferences, _warning = read_settings(settings_file_path())
         last_file = preferences.get("last_file")
         previous = Path(last_file).expanduser() if isinstance(last_file, str) else None
-        source = previous.resolve() if previous is not None and previous.is_file() else Path("registers.s").resolve()
+        source = (
+            previous.resolve()
+            if previous is not None and previous.is_file()
+            else Path(__file__).with_name("template.s").resolve()
+        )
     AssemblyWorkbench(root, source)
     root.mainloop()
 
