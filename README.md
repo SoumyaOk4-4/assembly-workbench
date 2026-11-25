@@ -75,3 +75,7 @@ offers light/dark themes and font controls. Preferences are stored in
 
 Shortcuts: Ctrl+S save, Ctrl+O open, Ctrl+N new, Ctrl+F find/replace, Ctrl+G go
 to line, Ctrl+/ comment/uncomment, Ctrl+Z undo, and Ctrl+Y redo.
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE).

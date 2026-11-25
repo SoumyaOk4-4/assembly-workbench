@@ -380,6 +380,12 @@ class AssemblyWorkbench:
 
         self.status = ttk.Label(self.root, text="Ready", anchor=tk.W, padding=(8, 4))
         self.status.pack(side=tk.BOTTOM, fill=tk.X)
+        ttk.Label(
+            self.root,
+            text="made with love by moshi",
+            anchor=tk.CENTER,
+            padding=(8, 2),
+        ).pack(side=tk.BOTTOM, fill=tk.X)
 
     def _add_output_tab(self, title: str) -> tk.Text:
         frame = ttk.Frame(self.output_tabs)
