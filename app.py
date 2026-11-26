@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import codecs
-import hashlib
+import io
 import json
 import os
 import queue
@@ -17,6 +17,7 @@ import threading
 import tkinter as tk
 import urllib.error
 import urllib.request
+import zipfile
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
@@ -1685,9 +1686,9 @@ class AssemblyWorkbench:
                     self._append(self.program_output, f"\nProgram exited with status {return_code}\n")
                     self.status.configure(text=f"Program exited with status {return_code}")
             elif kind == "update_check_complete":
-                _, version, app_url, app_checksum_url, icon_url, icon_checksum_url, error = event
+                _, version, package_url, error = event
                 self._handle_update_check_complete(
-                    version, app_url, app_checksum_url, icon_url, icon_checksum_url, error
+                    version, package_url, error
                 )
             elif kind == "update_download_complete":
                 _, version, app_temporary_path, icon_temporary_path, error = event
@@ -1732,7 +1733,7 @@ class AssemblyWorkbench:
                 raise ValueError("GitHub release is missing its version tag")
             if parse_version(tag) <= parse_version(APP_VERSION):
                 self.events.put(
-                    ("update_check_complete", tag, None, None, None, None, None)
+                    ("update_check_complete", tag, None, None)
                 )
                 return
 
@@ -1746,39 +1747,27 @@ class AssemblyWorkbench:
                     url = asset.get("browser_download_url")
                     if isinstance(name, str) and isinstance(url, str):
                         asset_urls[name] = url
-            app_url = asset_urls.get("app.py")
-            app_checksum_url = asset_urls.get("app.py.sha256")
-            icon_url = asset_urls.get("app-icon.png")
-            icon_checksum_url = asset_urls.get("app-icon.png.sha256")
-            if (
-                app_url is None
-                or app_checksum_url is None
-                or icon_url is None
-                or icon_checksum_url is None
-            ):
-                raise ValueError("The latest release is missing updater files")
-            update_urls = (app_url, app_checksum_url, icon_url, icon_checksum_url)
-            if any(not url.startswith(UPDATE_DOWNLOAD_PREFIX) for url in update_urls):
+            package_url = asset_urls.get(f"assembly-workbench-{tag}.zip")
+            if package_url is None:
+                raise ValueError("The latest release is missing its ZIP package")
+            if not package_url.startswith(UPDATE_DOWNLOAD_PREFIX):
                 raise ValueError("GitHub returned an unexpected update download URL")
             self.events.put(
                 (
                     "update_check_complete",
                     tag,
-                    app_url,
-                    app_checksum_url,
-                    icon_url,
-                    icon_checksum_url,
+                    package_url,
                     None,
                 )
             )
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
                 self.events.put(
-                    ("update_check_complete", None, None, None, None, None, None)
+                    ("update_check_complete", None, None, None)
                 )
             else:
                 self.events.put(
-                    ("update_check_complete", None, None, None, None, None, str(exc))
+                    ("update_check_complete", None, None, str(exc))
                 )
         except (
             urllib.error.URLError,
@@ -1789,16 +1778,13 @@ class AssemblyWorkbench:
             ValueError,
         ) as exc:
             self.events.put(
-                ("update_check_complete", None, None, None, None, None, str(exc))
+                ("update_check_complete", None, None, str(exc))
             )
 
     def _handle_update_check_complete(
         self,
         version: str | None,
-        app_url: str | None,
-        app_checksum_url: str | None,
-        icon_url: str | None,
-        icon_checksum_url: str | None,
+        package_url: str | None,
         error: str | None,
     ) -> None:
         self.update_in_progress = False
@@ -1815,12 +1801,7 @@ class AssemblyWorkbench:
                 parent=self.root,
             )
             return
-        if (
-            app_url is None
-            or app_checksum_url is None
-            or icon_url is None
-            or icon_checksum_url is None
-        ):
+        if package_url is None:
             self.status.configure(text=f"Assembly Workbench {APP_VERSION} is up to date")
             messagebox.showinfo(
                 "Check for Updates",
@@ -1841,39 +1822,24 @@ class AssemblyWorkbench:
         self.status.configure(text=f"Downloading Assembly Workbench {version}…")
         threading.Thread(
             target=self._download_update_worker,
-            args=(version, app_url, app_checksum_url, icon_url, icon_checksum_url),
+            args=(version, package_url),
             daemon=True,
         ).start()
 
     def _download_update_worker(
         self,
         version: str,
-        app_url: str,
-        app_checksum_url: str,
-        icon_url: str,
-        icon_checksum_url: str,
+        package_url: str,
     ) -> None:
         temporary_app_path: Path | None = None
         temporary_icon_path: Path | None = None
         try:
-            app_source = self._fetch_update_resource(
-                app_url, "application/octet-stream", MAX_UPDATE_FILE_BYTES
+            package_data = self._fetch_update_resource(
+                package_url, "application/octet-stream", MAX_UPDATE_FILE_BYTES
             )
-            app_checksum_data = self._fetch_update_resource(
-                app_checksum_url, "text/plain", 256
-            )
-            icon_source = self._fetch_update_resource(
-                icon_url, "application/octet-stream", MAX_UPDATE_FILE_BYTES
-            )
-            icon_checksum_data = self._fetch_update_resource(
-                icon_checksum_url, "text/plain", 256
-            )
-            self._verify_update_asset(app_source, app_checksum_data, "app.py")
-            self._verify_update_asset(
-                icon_source, icon_checksum_data, "app-icon.png"
-            )
+            app_source, icon_source = self._read_update_package(package_data)
             if not icon_source.startswith(b"\x89PNG\r\n\x1a\n"):
-                raise ValueError("The release app icon is not a valid PNG file")
+                raise ValueError("The ZIP package app icon is not a valid PNG file")
             compile(app_source.decode("utf-8"), "app.py", "exec")
 
             app_path = Path(__file__).resolve()
@@ -1900,6 +1866,7 @@ class AssemblyWorkbench:
             UnicodeDecodeError,
             SyntaxError,
             ValueError,
+            zipfile.BadZipFile,
         ) as exc:
             error = str(exc)
             for temporary_path in (temporary_app_path, temporary_icon_path):
@@ -1941,12 +1908,19 @@ class AssemblyWorkbench:
         )
 
     @staticmethod
-    def _verify_update_asset(data: bytes, checksum_data: bytes, name: str) -> None:
-        expected_checksum = checksum_data.decode("ascii").strip()
-        if re.fullmatch(r"[0-9a-f]{64}", expected_checksum) is None:
-            raise ValueError(f"The release contains an invalid checksum for {name}")
-        if hashlib.sha256(data).hexdigest() != expected_checksum:
-            raise ValueError(f"The downloaded {name} failed its SHA-256 check")
+    def _read_update_package(package_data: bytes) -> tuple[bytes, bytes]:
+        try:
+            with zipfile.ZipFile(io.BytesIO(package_data)) as package:
+                contents = []
+                for name in ("app.py", "assets/app-icon.png"):
+                    with package.open(name) as member:
+                        data = member.read(MAX_UPDATE_FILE_BYTES + 1)
+                    if len(data) > MAX_UPDATE_FILE_BYTES:
+                        raise ValueError(f"ZIP package member {name} is too large")
+                    contents.append(data)
+        except KeyError as exc:
+            raise ValueError("The ZIP package is missing updater files") from exc
+        return contents[0], contents[1]
 
     @staticmethod
     def _stage_update_asset(data: bytes, directory: Path, prefix: str) -> Path:

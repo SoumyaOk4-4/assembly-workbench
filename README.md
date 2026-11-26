@@ -125,7 +125,7 @@ restarts. The app directory must be writable.
 
 To publish a release, update `APP_VERSION` in `app.py` and push a matching tag
 (for example, `v0.2.0`). GitHub Actions creates the release with the ZIP
-package, updater files, and checksums.
+package as its only downloadable asset.
 
 ## License
 
