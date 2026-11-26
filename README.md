@@ -1,109 +1,132 @@
-# Assembly Workbench
+<p align="center">
+  <img src="assets/app-icon.png" alt="Assembly Workbench dragon logo" width="144">
+</p>
 
-A lightweight desktop editor for assembling, running, and debugging Linux
-assembly under QEMU/GDB.
+<h1 align="center">Assembly Workbench</h1>
 
-## Requirements
+<p align="center">
+  A lightweight desktop workbench for writing, building, running, and debugging
+  Linux assembly.
+</p>
+
+<p align="center">
+  <a href="https://github.com/SoumyaOk4-4/assembly-workbench/releases/latest">
+    <img alt="Latest release" src="https://img.shields.io/github/v/release/SoumyaOk4-4/assembly-workbench?display_name=tag&color=35d985">
+  </a>
+  <a href="https://github.com/SoumyaOk4-4/assembly-workbench/actions/workflows/publish-release.yml">
+    <img alt="Release workflow" src="https://img.shields.io/github/actions/workflow/status/SoumyaOk4-4/assembly-workbench/publish-release.yml?branch=main&label=release%20workflow">
+  </a>
+  <a href="LICENSE">
+    <img alt="MIT License" src="https://img.shields.io/github/license/SoumyaOk4-4/assembly-workbench">
+  </a>
+</p>
+
+---
+
+## What it does
+
+- **Edit** assembly in a syntax-highlighted editor with line numbers,
+  auto-indent, find and replace, and comment toggling.
+- **Build and run** programs for AArch64, ARM 32-bit, x86, and x86_64 using
+  GNU assemblers/linkers and QEMU.
+- **Debug** with GDB: step through instructions, set source breakpoints, and
+  inspect registers, memory, stack words, and disassembly.
+- **Customize** the editor with Light, Dark, Yellow, and Pink themes, plus
+  adjustable fonts and tab width.
+- **Update** from the app with **Check Updates**.
+
+## Get started
+
+### Requirements
 
 - Python 3 with Tkinter
 - `gdb-multiarch`
-- QEMU user-mode emulators for the targets you use
-- Target assemblers/linkers:
-  - AArch64: `aarch64-linux-gnu-as` and `aarch64-linux-gnu-ld`
-  - ARM 32-bit: `arm-linux-gnueabihf-as` and `arm-linux-gnueabihf-ld`
-  - x86 and x86_64: GNU `as` and `ld`
+- QEMU user-mode emulators (`qemu-user`)
+- GNU assemblers and linkers: `binutils`, `binutils-aarch64-linux-gnu`, and
+  `binutils-arm-linux-gnueabihf` for the targets you use
 - Bash for the embedded Terminal tab
 
-On Debian/Ubuntu, the packages commonly needed are `binutils-aarch64-linux-gnu`,
-`binutils-arm-linux-gnueabihf`, `binutils`, `gdb-multiarch`, and `qemu-user`.
+On Debian or Ubuntu, install the common dependencies with:
 
-## Start
+```sh
+sudo apt install python3 python3-tk binutils binutils-aarch64-linux-gnu \
+  binutils-arm-linux-gnueabihf gdb-multiarch qemu-user
+```
+
+### Launch
+
+Download and extract the [latest release](https://github.com/SoumyaOk4-4/assembly-workbench/releases/latest), then run:
 
 ```sh
 ./app
 ```
 
-The launcher returns to the terminal immediately; the workbench keeps running
-if you close the terminal.
-
-Without a remembered source file, the workbench opens the bundled `template.s`.
-
-Or open a source file directly:
+Open a source file directly:
 
 ```sh
 ./app path/to/program.s
 ```
 
-The target selector supports **AArch64**, **ARM 32-bit**, **x86 (32-bit)**, and
-**x86_64**. It remembers your target selection. Choose assembly syntax and
-system calls appropriate to the selected target.
+The launcher starts the workbench in the background. On first launch, it opens
+the bundled `template.s`; later launches restore your last source file and
+preferences.
 
 ## Build, run, and debug
 
-- **New** starts an empty source file. **Open** chooses a source file, and
-  **Save** writes the current file (asking for a filename if it is untitled).
-- **Build** assembles and links the source; messages appear in the **Build**
-  tab. **Run** builds and executes it under QEMU, with output in **Program**.
-- **Build + Debug** builds and starts a QEMU/GDB debugging session. Click the
-  editor gutter to set or remove a source breakpoint; **Step** advances one
-  machine instruction while debugging.
-- **Find** opens the find-and-replace dialog. **Find next** selects the next
-  case-insensitive match, **Replace** replaces the selected match, and
-  **Replace all** replaces every case-insensitive match.
-- **Recent** lists recently opened files; choose one and click **Open**.
-  **Settings** opens theme and font controls; click **Apply** to use them.
-- **Target** selects the assembly architecture. **Go to line** moves the
-  editor cursor to a specified line, and **Comment** toggles `//` comments on
-  the current line or selected lines. **Tab spaces** sets the indentation
-  width inserted by Tab and automatic indentation.
-- The **Memory inspector** works during **Build + Debug** (Build and Run do not
-  attach GDB). It automatically reads 128 bytes from the stack pointer when
-  execution stops. To inspect another location, enter a register, `&symbol`,
-  or numeric address and click **Read**. A register such as `$x0` is treated as
-  an address: its current value must be a mapped, readable pointer. An integer
-  like `9` is not a valid memory address just because it is in a register.
-  Choose bytes, 32-bit words, or 64-bit words; word displays are little-endian.
-- The **Stack** view below the Memory inspector automatically shows the first
-  32 32-bit words from the current stack pointer whenever execution stops.
-- The **Disassembly** tab shows the full function containing the current
-  instruction when execution stops, including GDB's current-instruction marker.
-- Register views include hexadecimal, unsigned, signed, and binary formats.
-  The register filter accepts comma-separated names (for example, `x0, sp,
-  lr`); `lr` also matches `x30` on AArch64 and `r14` on ARM. Leave it empty to
-  show all registers. Filter names are remembered between launches. Changed
-  registers are highlighted, and condition flags are displayed.
-- Assembler errors are highlighted in the **Build** tab; click one to jump to
-  its source line.
+| Action | What it does |
+| --- | --- |
+| **Build** | Assembles and links the current source; diagnostics appear in Build. |
+| **Run** | Builds and executes the program under QEMU. |
+| **Build + Debug** | Starts QEMU and GDB for instruction-level debugging. |
+| **Step** | Advances one machine instruction. |
+
+Click the editor gutter to toggle source breakpoints. While debugging, the
+register panel shows values and condition flags; the Memory inspector reads
+memory from a register, label, or address; and the Stack view shows 32
+32-bit words from the current stack pointer.
+
+Supported targets are **AArch64**, **ARM 32-bit**, **x86 (32-bit)**, and
+**x86_64**. Use assembly syntax and system calls appropriate to the selected
+target.
 
 ## Editor and preferences
 
-The editor includes line numbers, assembly syntax colors, auto-indent,
-configurable Tab spaces, comment/uncomment, go-to-line, find/replace, undo/redo,
-and an unsaved-changes indicator. Saved files autosave after a short pause.
-Closing with unsaved changes offers **Save and Close**, **Close Without
-Saving**, or **Cancel**. Cancel leaves the workbench open.
+The editor includes syntax coloring, line numbers, auto-indent, configurable
+tab spaces, comment/uncomment, go-to-line, find/replace, undo/redo, and
+autosave. When closing with unsaved edits, you can save, discard, or cancel.
 
-The app restores the last file, target, theme, font, indentation width, and
-window size between sessions. Preferences are stored in
-`$XDG_CONFIG_HOME/aarch64-assembly-workbench/settings.json` (normally
-`~/.config/aarch64-assembly-workbench/settings.json`).
-Available themes are **Light**, **Dark**, **Yellow**, and **Pink**.
+Choose **Settings** to select a theme, font, font size, and indentation width.
+Preferences and recent files are stored in:
 
-## Updating
+```text
+$XDG_CONFIG_HOME/aarch64-assembly-workbench/settings.json
+```
 
-Click **Check Updates** to check the latest stable GitHub release. When an
-update is available, the app downloads the release's `app.py` and icon, verifies
-their SHA-256 checksums, installs them, and restarts. The app folder must be
-writable.
+If `XDG_CONFIG_HOME` is not set, the default location is
+`~/.config/aarch64-assembly-workbench/settings.json`.
 
-To publish an update, change `APP_VERSION` in `app.py` and push a matching
-version tag such as `v0.2.0`. GitHub Actions publishes the app and icon
-checksum assets used by the updater, along with a ZIP of the app, launcher,
-template, documentation, and icon.
+### Keyboard shortcuts
 
-Shortcuts: Ctrl+S save, Ctrl+O open, Ctrl+N new, Ctrl+F find/replace, Ctrl+G go
-to line, Ctrl+/ comment/uncomment, Ctrl+Z undo, and Ctrl+Y redo.
+| Shortcut | Action |
+| --- | --- |
+| Ctrl+S | Save |
+| Ctrl+O | Open |
+| Ctrl+N | New file |
+| Ctrl+F | Find and replace |
+| Ctrl+G | Go to line |
+| Ctrl+/ | Comment or uncomment |
+| Ctrl+Z / Ctrl+Y | Undo / redo |
+
+## Updates and releases
+
+Click **Check Updates** to look for the latest stable release. When one is
+available, the app verifies and installs the updated program and icon, then
+restarts. The app directory must be writable.
+
+To publish a release, update `APP_VERSION` in `app.py` and push a matching tag
+(for example, `v0.2.0`). GitHub Actions creates the release with the ZIP
+package, updater files, and checksums.
 
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](LICENSE).
+Released under the [MIT License](LICENSE).
