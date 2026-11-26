@@ -64,7 +64,7 @@ system calls appropriate to the selected target.
   like `9` is not a valid memory address just because it is in a register.
   Choose bytes, 32-bit words, or 64-bit words; word displays are little-endian.
 - The **Stack** view below the Memory inspector automatically shows the first
-  10 32-bit words from the current stack pointer whenever execution stops.
+  32 32-bit words from the current stack pointer whenever execution stops.
 - The **Disassembly** tab shows the full function containing the current
   instruction when execution stops, including GDB's current-instruction marker.
 - Register views include hexadecimal, unsigned, signed, and binary formats.
@@ -87,6 +87,16 @@ The app restores the last file, target, theme, font, indentation width, and
 window size between sessions. Preferences are stored in
 `$XDG_CONFIG_HOME/aarch64-assembly-workbench/settings.json` (normally
 `~/.config/aarch64-assembly-workbench/settings.json`).
+
+## Updating
+
+Click **Check Updates** to check the latest stable GitHub release. When an
+update is available, the app downloads the release's `app.py`, verifies its
+SHA-256 checksum, installs it, and restarts. The app folder must be writable.
+
+To publish an update, change `APP_VERSION` in `app.py` and push a matching
+version tag such as `v0.2.0`. GitHub Actions publishes the app and checksum
+assets used by the updater.
 
 Shortcuts: Ctrl+S save, Ctrl+O open, Ctrl+N new, Ctrl+F find/replace, Ctrl+G go
 to line, Ctrl+/ comment/uncomment, Ctrl+Z undo, and Ctrl+Y redo.

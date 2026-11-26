@@ -4,21 +4,32 @@
 from __future__ import annotations
 
 import codecs
+import hashlib
 import json
 import os
 import queue
 import re
 import socket
+import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import tkinter as tk
+import urllib.error
+import urllib.request
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 
 AUTOSAVE_DELAY_MS = 800
 RECENT_FILE_LIMIT = 10
+APP_VERSION = "0.1.0"
+UPDATE_API_URL = "https://api.github.com/repos/SoumyaOk4-4/assembly-workbench/releases/latest"
+UPDATE_DOWNLOAD_PREFIX = (
+    "https://github.com/SoumyaOk4-4/assembly-workbench/releases/download/"
+)
+MAX_UPDATE_FILE_BYTES = 2 * 1024 * 1024
 FONT_FAMILIES = ("monospace", "DejaVu Sans Mono", "Liberation Mono", "Courier New")
 THEME_COLORS = {
     "Light": {
@@ -100,6 +111,13 @@ REGISTER_FILTER_ALIASES = {
 }
 
 
+def parse_version(version: str) -> tuple[int, int, int]:
+    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", version)
+    if match is None:
+        raise ValueError(f"Unsupported release version: {version}")
+    return tuple(int(part) for part in match.groups())
+
+
 def settings_file_path() -> Path:
     config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
     return config_home / "aarch64-assembly-workbench" / "settings.json"
@@ -177,6 +195,7 @@ class AssemblyWorkbench:
         self.disassembly_capture: list[str] = []
         self.continue_mode = False
         self.pause_requested = False
+        self.update_in_progress = False
         self.is_dirty = False
         self.highlight_id: str | None = None
         self.closed = False
@@ -197,7 +216,7 @@ class AssemblyWorkbench:
         self._set_text(
             self.stack_view,
             "Stack view needs a Build + Debug session.\n"
-            "It shows 10 32-bit words from the current stack pointer.",
+            "It shows 32 32-bit words from the current stack pointer.",
         )
         self._apply_theme()
         self._apply_font()
@@ -224,6 +243,11 @@ class AssemblyWorkbench:
             ("Settings", self.show_settings),
         ):
             ttk.Button(toolbar, text=label, command=command).pack(side=tk.LEFT, padx=(0, 5))
+
+        self.update_button = ttk.Button(
+            toolbar, text="Check Updates", command=self._check_for_updates
+        )
+        self.update_button.pack(side=tk.LEFT, padx=(0, 5))
 
         ttk.Label(toolbar, text="Target").pack(side=tk.LEFT, padx=(8, 3))
         self.target_var = tk.StringVar(value=self.target_name)
@@ -383,10 +407,10 @@ class AssemblyWorkbench:
         self.stack.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         stack_scroll.configure(command=self.stack.yview)
         memory_horizontal_scroll.configure(command=self.stack.xview)
-        memory_stack.add(memory_frame, weight=2)
+        memory_stack.add(memory_frame, weight=1)
 
         stack_view_frame = ttk.LabelFrame(
-            memory_stack, text="Stack (10 x 32-bit words from SP)"
+            memory_stack, text="Stack (32 x 32-bit words from SP)"
         )
         stack_view_scroll = ttk.Scrollbar(stack_view_frame, orient=tk.VERTICAL)
         stack_view_scroll.pack(side=tk.RIGHT, fill=tk.Y)
@@ -397,7 +421,7 @@ class AssemblyWorkbench:
         self.stack_view = tk.Text(
             stack_view_frame,
             wrap=tk.NONE,
-            height=5,
+            height=10,
             font=("monospace", 10),
             state=tk.DISABLED,
             yscrollcommand=stack_view_scroll.set,
@@ -406,7 +430,7 @@ class AssemblyWorkbench:
         self.stack_view.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         stack_view_scroll.configure(command=self.stack_view.yview)
         stack_view_horizontal_scroll.configure(command=self.stack_view.xview)
-        memory_stack.add(stack_view_frame, weight=1)
+        memory_stack.add(stack_view_frame, weight=2)
         state_top.add(memory_stack, weight=1)
 
         state_top.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
@@ -1310,7 +1334,7 @@ class AssemblyWorkbench:
         self._set_text(
             self.stack_view,
             "Waiting for GDB to stop.\n"
-            "The stack view will show 10 32-bit words from the stack pointer.",
+            "The stack view will show 32 32-bit words from the stack pointer.",
         )
         self._set_text(self.disassembly_output, "")
         self._append(
@@ -1505,11 +1529,13 @@ class AssemblyWorkbench:
             return
         stack_pointer = TARGETS[self.target_name]["stack_pointer"]
         token = self._send_gdb(
-            f"-data-read-memory-bytes {stack_pointer} 40",
+            f"-data-read-memory-bytes {stack_pointer} 128",
             action=("stack", stack_pointer),
         )
         if token is not None:
-            self._set_text(self.stack_view, f"Reading 10 32-bit words from {stack_pointer}…")
+            self._set_text(
+                self.stack_view, f"Reading 32 32-bit words from {stack_pointer}…"
+            )
 
     def _read_current_function_disassembly(self) -> None:
         self.disassembly_capture.clear()
@@ -1614,7 +1640,256 @@ class AssemblyWorkbench:
                     self.runner = None
                     self._append(self.program_output, f"\nProgram exited with status {return_code}\n")
                     self.status.configure(text=f"Program exited with status {return_code}")
+            elif kind == "update_check_complete":
+                _, version, app_url, checksum_url, error = event
+                self._handle_update_check_complete(version, app_url, checksum_url, error)
+            elif kind == "update_download_complete":
+                _, version, temporary_path, error = event
+                self._handle_update_download_complete(version, temporary_path, error)
         self.root.after(50, self._drain_events)
+
+    def _check_for_updates(self) -> None:
+        if self.update_in_progress:
+            return
+        self.update_in_progress = True
+        self.update_button.configure(state=tk.DISABLED)
+        self.status.configure(text="Checking for updates…")
+        threading.Thread(target=self._check_updates_worker, daemon=True).start()
+
+    @staticmethod
+    def _fetch_update_resource(url: str, accept: str, limit: int) -> bytes:
+        request = urllib.request.Request(
+            url,
+            headers={
+                "Accept": accept,
+                "User-Agent": "Assembly-Workbench-Updater",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=15) as response:
+            data = response.read(limit + 1)
+        if len(data) > limit:
+            raise ValueError(f"Update resource exceeded the {limit}-byte limit")
+        return data
+
+    def _check_updates_worker(self) -> None:
+        try:
+            response = self._fetch_update_resource(
+                UPDATE_API_URL, "application/vnd.github+json", 1024 * 1024
+            )
+            release = json.loads(response.decode("utf-8"))
+            if not isinstance(release, dict):
+                raise ValueError("GitHub returned an invalid release record")
+            tag = release.get("tag_name")
+            if not isinstance(tag, str):
+                raise ValueError("GitHub release is missing its version tag")
+            if parse_version(tag) <= parse_version(APP_VERSION):
+                self.events.put(("update_check_complete", tag, None, None, None))
+                return
+
+            assets = release.get("assets")
+            if not isinstance(assets, list):
+                raise ValueError("GitHub release is missing its update assets")
+            asset_urls: dict[str, str] = {}
+            for asset in assets:
+                if isinstance(asset, dict):
+                    name = asset.get("name")
+                    url = asset.get("browser_download_url")
+                    if isinstance(name, str) and isinstance(url, str):
+                        asset_urls[name] = url
+            app_url = asset_urls.get("app.py")
+            checksum_url = asset_urls.get("app.py.sha256")
+            if app_url is None or checksum_url is None:
+                raise ValueError("The latest release is missing updater files")
+            if not app_url.startswith(UPDATE_DOWNLOAD_PREFIX) or not checksum_url.startswith(
+                UPDATE_DOWNLOAD_PREFIX
+            ):
+                raise ValueError("GitHub returned an unexpected update download URL")
+            self.events.put(
+                ("update_check_complete", tag, app_url, checksum_url, None)
+            )
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                self.events.put(("update_check_complete", None, None, None, None))
+            else:
+                self.events.put(
+                    ("update_check_complete", None, None, None, str(exc))
+                )
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            OSError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            ValueError,
+        ) as exc:
+            self.events.put(("update_check_complete", None, None, None, str(exc)))
+
+    def _handle_update_check_complete(
+        self,
+        version: str | None,
+        app_url: str | None,
+        checksum_url: str | None,
+        error: str | None,
+    ) -> None:
+        self.update_in_progress = False
+        self.update_button.configure(state=tk.NORMAL)
+        if error is not None:
+            self.status.configure(text="Update check failed")
+            messagebox.showerror("Update check failed", error, parent=self.root)
+            return
+        if version is None:
+            self.status.configure(text="No GitHub releases have been published")
+            messagebox.showinfo(
+                "Check for Updates",
+                "No releases are available yet. Check again after a release is published.",
+                parent=self.root,
+            )
+            return
+        if app_url is None or checksum_url is None:
+            self.status.configure(text=f"Assembly Workbench {APP_VERSION} is up to date")
+            messagebox.showinfo(
+                "Check for Updates",
+                f"Assembly Workbench {APP_VERSION} is up to date.",
+                parent=self.root,
+            )
+            return
+        if not messagebox.askyesno(
+            "Update available",
+            f"Version {version} is available. Replace app.py and restart now?",
+            parent=self.root,
+        ):
+            self.status.configure(text="Update postponed")
+            return
+
+        self.update_in_progress = True
+        self.update_button.configure(state=tk.DISABLED)
+        self.status.configure(text=f"Downloading Assembly Workbench {version}…")
+        threading.Thread(
+            target=self._download_update_worker,
+            args=(version, app_url, checksum_url),
+            daemon=True,
+        ).start()
+
+    def _download_update_worker(
+        self, version: str, app_url: str, checksum_url: str
+    ) -> None:
+        temporary_path: Path | None = None
+        try:
+            source = self._fetch_update_resource(
+                app_url, "application/octet-stream", MAX_UPDATE_FILE_BYTES
+            )
+            checksum_data = self._fetch_update_resource(
+                checksum_url, "text/plain", 256
+            )
+            expected_checksum = checksum_data.decode("ascii").strip()
+            if re.fullmatch(r"[0-9a-f]{64}", expected_checksum) is None:
+                raise ValueError("The release contains an invalid SHA-256 checksum")
+            actual_checksum = hashlib.sha256(source).hexdigest()
+            if actual_checksum != expected_checksum:
+                raise ValueError("The downloaded update failed its SHA-256 check")
+            compile(source.decode("utf-8"), "app.py", "exec")
+
+            app_path = Path(__file__).resolve()
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                prefix=".app-update-",
+                suffix=".tmp",
+                dir=app_path.parent,
+                delete=False,
+            ) as update_file:
+                temporary_path = Path(update_file.name)
+                update_file.write(source)
+                update_file.flush()
+                os.fsync(update_file.fileno())
+            os.chmod(temporary_path, stat.S_IMODE(app_path.stat().st_mode))
+            self.events.put(
+                ("update_download_complete", version, str(temporary_path), None)
+            )
+        except (
+            urllib.error.HTTPError,
+            urllib.error.URLError,
+            TimeoutError,
+            OSError,
+            UnicodeDecodeError,
+            SyntaxError,
+            ValueError,
+        ) as exc:
+            error = str(exc)
+            if temporary_path is not None:
+                try:
+                    temporary_path.unlink()
+                except FileNotFoundError:
+                    pass
+                except OSError as cleanup_error:
+                    error += f"\nCould not remove temporary update file: {cleanup_error}"
+            self.events.put(("update_download_complete", version, None, error))
+
+    def _handle_update_download_complete(
+        self, version: str, temporary_path: str | None, error: str | None
+    ) -> None:
+        self.update_in_progress = False
+        self.update_button.configure(state=tk.NORMAL)
+        if error is not None or temporary_path is None:
+            self.status.configure(text="Update download failed")
+            messagebox.showerror(
+                "Update download failed",
+                error or "No update file was downloaded.",
+                parent=self.root,
+            )
+            return
+        self._apply_update(Path(temporary_path), version)
+
+    def _apply_update(self, temporary_path: Path, version: str) -> None:
+        if self.is_dirty:
+            choice = self._confirm_close()
+            if choice == "cancel":
+                self._remove_temporary_update(temporary_path)
+                self.status.configure(text="Update cancelled")
+                return
+            if choice == "save" and not self.save_file():
+                self._remove_temporary_update(temporary_path)
+                return
+        if not self._save_preferences():
+            self._remove_temporary_update(temporary_path)
+            messagebox.showerror(
+                "Update failed",
+                "Could not save settings; the update was not installed.",
+                parent=self.root,
+            )
+            return
+
+        self.stop_execution()
+        app_path = Path(__file__).resolve()
+        try:
+            os.replace(temporary_path, app_path)
+        except OSError as exc:
+            self._remove_temporary_update(temporary_path)
+            self.status.configure(text="Could not install update")
+            messagebox.showerror("Update failed", str(exc), parent=self.root)
+            return
+
+        self.status.configure(text=f"Installed version {version}; restarting…")
+        try:
+            os.execv(sys.executable, [sys.executable, str(app_path), *sys.argv[1:]])
+        except OSError as exc:
+            self.status.configure(text="Update installed; restart the app manually")
+            messagebox.showerror(
+                "Update installed",
+                f"The update was installed, but automatic restart failed: {exc}\n"
+                "Close and reopen the app to use the new version.",
+                parent=self.root,
+            )
+
+    def _remove_temporary_update(self, path: Path) -> None:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            self._append(
+                self.debug_output,
+                f"Could not remove temporary update file {path}: {exc}\n",
+            )
 
     def _start_reader(self, proc: subprocess.Popen[str], name: str) -> None:
         if proc.stdout is None:
@@ -1956,7 +2231,7 @@ class AssemblyWorkbench:
                 ]
                 if words:
                     rows.append(f"0x{address + offset:016x}  {' '.join(words)}")
-        output = "10 x 32-bit words from the current stack pointer\n"
+        output = "32 x 32-bit words from the current stack pointer\n"
         output += "\n".join(rows) if rows else "No readable stack words were returned."
         self._set_text(self.stack_view, output + ("\n" if rows else ""))
 
@@ -2028,6 +2303,13 @@ class AssemblyWorkbench:
         return result[0]
 
     def close(self) -> None:
+        if self.update_in_progress:
+            messagebox.showinfo(
+                "Update in progress",
+                "Wait for the update check or download to finish before closing.",
+                parent=self.root,
+            )
+            return
         if self.is_dirty:
             choice = self._confirm_close()
             if choice == "cancel":
