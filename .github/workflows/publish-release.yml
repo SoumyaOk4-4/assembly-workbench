@@ -44,6 +44,8 @@ jobs:
           cp assets/app-icon.png dist/app-icon.png
           sha256sum dist/app.py | cut -d ' ' -f1 > dist/app.py.sha256
           sha256sum dist/app-icon.png | cut -d ' ' -f1 > dist/app-icon.png.sha256
+          zip -r "dist/assembly-workbench-${GITHUB_REF_NAME}.zip" \
+            app app.py template.s README.md LICENSE assets
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -51,5 +53,6 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             dist/app.py dist/app.py.sha256 \
             dist/app-icon.png dist/app-icon.png.sha256 \
+            "dist/assembly-workbench-${GITHUB_REF_NAME}.zip" \
             --title "$GITHUB_REF_NAME" \
             --generate-notes

@@ -23,7 +23,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 AUTOSAVE_DELAY_MS = 800
 RECENT_FILE_LIMIT = 10
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.1.1"
 UPDATE_API_URL = "https://api.github.com/repos/SoumyaOk4-4/assembly-workbench/releases/latest"
 UPDATE_DOWNLOAD_PREFIX = (
     "https://github.com/SoumyaOk4-4/assembly-workbench/releases/download/"

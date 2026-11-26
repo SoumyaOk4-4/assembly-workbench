@@ -96,8 +96,9 @@ their SHA-256 checksums, installs them, and restarts. The app folder must be
 writable.
 
 To publish an update, change `APP_VERSION` in `app.py` and push a matching
-version tag such as `v0.2.0`. GitHub Actions publishes the app and checksum
-assets used by the updater.
+version tag such as `v0.2.0`. GitHub Actions publishes the app and icon
+checksum assets used by the updater, along with a ZIP of the app, launcher,
+template, documentation, and icon.
 
 Shortcuts: Ctrl+S save, Ctrl+O open, Ctrl+N new, Ctrl+F find/replace, Ctrl+G go
 to line, Ctrl+/ comment/uncomment, Ctrl+Z undo, and Ctrl+Y redo.
