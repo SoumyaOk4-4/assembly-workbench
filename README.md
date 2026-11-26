@@ -87,6 +87,7 @@ The app restores the last file, target, theme, font, indentation width, and
 window size between sessions. Preferences are stored in
 `$XDG_CONFIG_HOME/aarch64-assembly-workbench/settings.json` (normally
 `~/.config/aarch64-assembly-workbench/settings.json`).
+Available themes are **Light**, **Dark**, **Yellow**, and **Pink**.
 
 ## Updating
 

@@ -23,7 +23,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 AUTOSAVE_DELAY_MS = 800
 RECENT_FILE_LIMIT = 10
-APP_VERSION = "0.1.1"
+APP_VERSION = "0.1.2"
 UPDATE_API_URL = "https://api.github.com/repos/SoumyaOk4-4/assembly-workbench/releases/latest"
 UPDATE_DOWNLOAD_PREFIX = (
     "https://github.com/SoumyaOk4-4/assembly-workbench/releases/download/"
@@ -50,6 +50,7 @@ THEME_COLORS = {
         "execution": "#fff2a8",
         "changed": "#fff2a8",
         "breakpoint": "#cc3333",
+        "error": "#d00000",
     },
     "Dark": {
         "background": "#1e1e1e",
@@ -69,6 +70,47 @@ THEME_COLORS = {
         "execution": "#51461a",
         "changed": "#3b3a23",
         "breakpoint": "#f14c4c",
+        "error": "#ff6b68",
+    },
+    "Yellow": {
+        "background": "#211d10",
+        "panel": "#302914",
+        "foreground": "#fff4c2",
+        "muted": "#c2ae68",
+        "editor": "#181509",
+        "gutter": "#241f10",
+        "selection": "#5b4b1b",
+        "instruction": "#f5c84c",
+        "register": "#9de0a5",
+        "directive": "#ff9470",
+        "number": "#ffdf70",
+        "label": "#ead785",
+        "string": "#ffad78",
+        "comment": "#9cab69",
+        "execution": "#4b401a",
+        "changed": "#5b4d1c",
+        "breakpoint": "#ff625a",
+        "error": "#ff8274",
+    },
+    "Pink": {
+        "background": "#21141d",
+        "panel": "#321d2b",
+        "foreground": "#ffe5f1",
+        "muted": "#c38ca6",
+        "editor": "#170e14",
+        "gutter": "#251721",
+        "selection": "#63344e",
+        "instruction": "#ff80ab",
+        "register": "#80deea",
+        "directive": "#ff8a80",
+        "number": "#f6d365",
+        "label": "#f8bbd0",
+        "string": "#ce93d8",
+        "comment": "#94c973",
+        "execution": "#50303f",
+        "changed": "#5b394a",
+        "breakpoint": "#ff5370",
+        "error": "#ff8299",
     },
 }
 TARGETS = {
@@ -143,7 +185,7 @@ class AssemblyWorkbench:
         self.preferences_path = preferences_path or settings_file_path()
         preferences, self.preferences_warning = read_settings(self.preferences_path)
         self.theme = preferences.get("theme", "Dark")
-        if self.theme not in ("Light", "Dark"):
+        if not isinstance(self.theme, str) or self.theme not in THEME_COLORS:
             self.theme = "Dark"
         self.colors = THEME_COLORS[self.theme]
         self.font_family = preferences.get("font_family", "monospace")
@@ -631,7 +673,7 @@ class AssemblyWorkbench:
         self.registers.tag_configure("changed", background=self.colors["changed"])
         self.build_output.tag_configure(
             "source_error",
-            foreground="#ff6b68" if self.theme == "Dark" else "#d00000",
+            foreground=self.colors["error"],
             underline=True,
         )
         self._configure_syntax_tags()
@@ -773,7 +815,7 @@ class AssemblyWorkbench:
         size_value = tk.IntVar(value=self.font_size)
         indent_value = tk.StringVar(value=self.indent_width.get())
         fields = (
-            ("Theme", ttk.Combobox(window, textvariable=theme_value, values=("Light", "Dark"), state="readonly")),
+            ("Theme", ttk.Combobox(window, textvariable=theme_value, values=tuple(THEME_COLORS), state="readonly")),
             ("Font", ttk.Combobox(window, textvariable=font_value, values=FONT_FAMILIES, state="readonly")),
             ("Font size", ttk.Spinbox(window, from_=8, to=32, textvariable=size_value, width=8)),
             ("Tab spaces", ttk.Combobox(window, textvariable=indent_value, values=("2", "4", "8"), state="readonly")),
