@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+  </defs>
+  <rect x="7" y="7" width="242" height="242" rx="48" fill="#07110d"/>
+  <rect x="11" y="11" width="234" height="234" rx="43" fill="none"
+        stroke="#35d985" stroke-width="3"/>
+  <path d="M29 64V35h30M197 35h30v29M29 192v29h30M197 221h30v-29"
+        fill="none" stroke="#1b754d" stroke-width="4" stroke-linecap="round"/>
+  <path d="M45 127h18m130 0h18M128 45v12m0 142v12"
+        stroke="#1b754d" stroke-width="3" stroke-linecap="round"/>
+  <g fill="#45f58c" opacity=".8">
+    <circle cx="45" cy="127" r="3"/>
+    <circle cx="211" cy="127" r="3"/>
+    <circle cx="128" cy="45" r="3"/>
+    <circle cx="128" cy="211" r="3"/>
+  </g>
+  <path d="M47 164
+           C59 153 72 146 89 141
+           L112 132 126 116 145 121 162 101
+           177 108 198 91 194 122
+           216 138 201 150 218 162
+           197 171
+           C187 194 164 207 139 209
+           L119 202 103 211 106 192
+           84 198 90 181
+           68 180 78 168 58 174Z"
+        fill="#27d878" stroke="#baffd0" stroke-width="2.5"
+        stroke-linejoin="round"/>
+  <path d="M126 119 133 92 151 112M164 104 177 78 184 112"
+        fill="#62f09a" stroke="#91ffb4" stroke-width="3"
+        stroke-linejoin="round"/>
+  <path d="M166 135c9-7 20-7 28-2-8 7-18 9-28 2Z" fill="#06130d"/>
+  <circle cx="180" cy="134" r="3.5" fill="#d9ff79"/>
+  <path d="m210 146 8 3-8 4M192 162l10 1M116 152l17 5-10 6"
+        fill="none" stroke="#063d29" stroke-width="3" stroke-linecap="round"
+        stroke-linejoin="round"/>
+  <path d="M77 172c13-11 24-19 38-25m-27 35 17-5m30 18 18-11"
+        fill="none" stroke="#d1ff9d" stroke-width="2" opacity=".8"
+        stroke-linecap="round"/>
+  <g fill="#a5ffc4" font-family="monospace" font-size="8" font-weight="bold">
+    <text x="34" y="91">0x</text>
+    <text x="194" y="195">SP</text>
+  </g>
+</svg>

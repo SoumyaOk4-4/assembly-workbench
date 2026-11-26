@@ -41,12 +41,15 @@ jobs:
         run: |
           mkdir -p dist
           cp app.py dist/app.py
+          cp assets/app-icon.png dist/app-icon.png
           sha256sum dist/app.py | cut -d ' ' -f1 > dist/app.py.sha256
+          sha256sum dist/app-icon.png | cut -d ' ' -f1 > dist/app-icon.png.sha256
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" \
             dist/app.py dist/app.py.sha256 \
+            dist/app-icon.png dist/app-icon.png.sha256 \
             --title "$GITHUB_REF_NAME" \
             --generate-notes

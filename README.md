@@ -91,8 +91,9 @@ window size between sessions. Preferences are stored in
 ## Updating
 
 Click **Check Updates** to check the latest stable GitHub release. When an
-update is available, the app downloads the release's `app.py`, verifies its
-SHA-256 checksum, installs it, and restarts. The app folder must be writable.
+update is available, the app downloads the release's `app.py` and icon, verifies
+their SHA-256 checksums, installs them, and restarts. The app folder must be
+writable.
 
 To publish an update, change `APP_VERSION` in `app.py` and push a matching
 version tag such as `v0.2.0`. GitHub Actions publishes the app and checksum

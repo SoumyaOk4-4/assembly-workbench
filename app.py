@@ -10,7 +10,6 @@ import os
 import queue
 import re
 import socket
-import stat
 import subprocess
 import sys
 import tempfile
@@ -30,6 +29,7 @@ UPDATE_DOWNLOAD_PREFIX = (
     "https://github.com/SoumyaOk4-4/assembly-workbench/releases/download/"
 )
 MAX_UPDATE_FILE_BYTES = 2 * 1024 * 1024
+APP_ICON_PATH = Path(__file__).resolve().with_name("assets") / "app-icon.png"
 FONT_FAMILIES = ("monospace", "DejaVu Sans Mono", "Liberation Mono", "Courier New")
 THEME_COLORS = {
     "Light": {
@@ -201,6 +201,8 @@ class AssemblyWorkbench:
         self.closed = False
 
         self.root.title("AArch64 Assembly Workbench")
+        self.app_icon = tk.PhotoImage(file=str(APP_ICON_PATH))
+        self.root.iconphoto(True, self.app_icon)
         self.root.geometry(self.window_geometry)
         self.root.minsize(900, 600)
         self.root.protocol("WM_DELETE_WINDOW", self.close)
@@ -1641,11 +1643,15 @@ class AssemblyWorkbench:
                     self._append(self.program_output, f"\nProgram exited with status {return_code}\n")
                     self.status.configure(text=f"Program exited with status {return_code}")
             elif kind == "update_check_complete":
-                _, version, app_url, checksum_url, error = event
-                self._handle_update_check_complete(version, app_url, checksum_url, error)
+                _, version, app_url, app_checksum_url, icon_url, icon_checksum_url, error = event
+                self._handle_update_check_complete(
+                    version, app_url, app_checksum_url, icon_url, icon_checksum_url, error
+                )
             elif kind == "update_download_complete":
-                _, version, temporary_path, error = event
-                self._handle_update_download_complete(version, temporary_path, error)
+                _, version, app_temporary_path, icon_temporary_path, error = event
+                self._handle_update_download_complete(
+                    version, app_temporary_path, icon_temporary_path, error
+                )
         self.root.after(50, self._drain_events)
 
     def _check_for_updates(self) -> None:
@@ -1683,7 +1689,9 @@ class AssemblyWorkbench:
             if not isinstance(tag, str):
                 raise ValueError("GitHub release is missing its version tag")
             if parse_version(tag) <= parse_version(APP_VERSION):
-                self.events.put(("update_check_complete", tag, None, None, None))
+                self.events.put(
+                    ("update_check_complete", tag, None, None, None, None, None)
+                )
                 return
 
             assets = release.get("assets")
@@ -1697,22 +1705,38 @@ class AssemblyWorkbench:
                     if isinstance(name, str) and isinstance(url, str):
                         asset_urls[name] = url
             app_url = asset_urls.get("app.py")
-            checksum_url = asset_urls.get("app.py.sha256")
-            if app_url is None or checksum_url is None:
-                raise ValueError("The latest release is missing updater files")
-            if not app_url.startswith(UPDATE_DOWNLOAD_PREFIX) or not checksum_url.startswith(
-                UPDATE_DOWNLOAD_PREFIX
+            app_checksum_url = asset_urls.get("app.py.sha256")
+            icon_url = asset_urls.get("app-icon.png")
+            icon_checksum_url = asset_urls.get("app-icon.png.sha256")
+            if (
+                app_url is None
+                or app_checksum_url is None
+                or icon_url is None
+                or icon_checksum_url is None
             ):
+                raise ValueError("The latest release is missing updater files")
+            update_urls = (app_url, app_checksum_url, icon_url, icon_checksum_url)
+            if any(not url.startswith(UPDATE_DOWNLOAD_PREFIX) for url in update_urls):
                 raise ValueError("GitHub returned an unexpected update download URL")
             self.events.put(
-                ("update_check_complete", tag, app_url, checksum_url, None)
+                (
+                    "update_check_complete",
+                    tag,
+                    app_url,
+                    app_checksum_url,
+                    icon_url,
+                    icon_checksum_url,
+                    None,
+                )
             )
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
-                self.events.put(("update_check_complete", None, None, None, None))
+                self.events.put(
+                    ("update_check_complete", None, None, None, None, None, None)
+                )
             else:
                 self.events.put(
-                    ("update_check_complete", None, None, None, str(exc))
+                    ("update_check_complete", None, None, None, None, None, str(exc))
                 )
         except (
             urllib.error.URLError,
@@ -1722,13 +1746,17 @@ class AssemblyWorkbench:
             json.JSONDecodeError,
             ValueError,
         ) as exc:
-            self.events.put(("update_check_complete", None, None, None, str(exc)))
+            self.events.put(
+                ("update_check_complete", None, None, None, None, None, str(exc))
+            )
 
     def _handle_update_check_complete(
         self,
         version: str | None,
         app_url: str | None,
-        checksum_url: str | None,
+        app_checksum_url: str | None,
+        icon_url: str | None,
+        icon_checksum_url: str | None,
         error: str | None,
     ) -> None:
         self.update_in_progress = False
@@ -1745,7 +1773,12 @@ class AssemblyWorkbench:
                 parent=self.root,
             )
             return
-        if app_url is None or checksum_url is None:
+        if (
+            app_url is None
+            or app_checksum_url is None
+            or icon_url is None
+            or icon_checksum_url is None
+        ):
             self.status.configure(text=f"Assembly Workbench {APP_VERSION} is up to date")
             messagebox.showinfo(
                 "Check for Updates",
@@ -1766,44 +1799,56 @@ class AssemblyWorkbench:
         self.status.configure(text=f"Downloading Assembly Workbench {version}…")
         threading.Thread(
             target=self._download_update_worker,
-            args=(version, app_url, checksum_url),
+            args=(version, app_url, app_checksum_url, icon_url, icon_checksum_url),
             daemon=True,
         ).start()
 
     def _download_update_worker(
-        self, version: str, app_url: str, checksum_url: str
+        self,
+        version: str,
+        app_url: str,
+        app_checksum_url: str,
+        icon_url: str,
+        icon_checksum_url: str,
     ) -> None:
-        temporary_path: Path | None = None
+        temporary_app_path: Path | None = None
+        temporary_icon_path: Path | None = None
         try:
-            source = self._fetch_update_resource(
+            app_source = self._fetch_update_resource(
                 app_url, "application/octet-stream", MAX_UPDATE_FILE_BYTES
             )
-            checksum_data = self._fetch_update_resource(
-                checksum_url, "text/plain", 256
+            app_checksum_data = self._fetch_update_resource(
+                app_checksum_url, "text/plain", 256
             )
-            expected_checksum = checksum_data.decode("ascii").strip()
-            if re.fullmatch(r"[0-9a-f]{64}", expected_checksum) is None:
-                raise ValueError("The release contains an invalid SHA-256 checksum")
-            actual_checksum = hashlib.sha256(source).hexdigest()
-            if actual_checksum != expected_checksum:
-                raise ValueError("The downloaded update failed its SHA-256 check")
-            compile(source.decode("utf-8"), "app.py", "exec")
+            icon_source = self._fetch_update_resource(
+                icon_url, "application/octet-stream", MAX_UPDATE_FILE_BYTES
+            )
+            icon_checksum_data = self._fetch_update_resource(
+                icon_checksum_url, "text/plain", 256
+            )
+            self._verify_update_asset(app_source, app_checksum_data, "app.py")
+            self._verify_update_asset(
+                icon_source, icon_checksum_data, "app-icon.png"
+            )
+            if not icon_source.startswith(b"\x89PNG\r\n\x1a\n"):
+                raise ValueError("The release app icon is not a valid PNG file")
+            compile(app_source.decode("utf-8"), "app.py", "exec")
 
             app_path = Path(__file__).resolve()
-            with tempfile.NamedTemporaryFile(
-                mode="wb",
-                prefix=".app-update-",
-                suffix=".tmp",
-                dir=app_path.parent,
-                delete=False,
-            ) as update_file:
-                temporary_path = Path(update_file.name)
-                update_file.write(source)
-                update_file.flush()
-                os.fsync(update_file.fileno())
-            os.chmod(temporary_path, stat.S_IMODE(app_path.stat().st_mode))
+            temporary_app_path = self._stage_update_asset(
+                app_source, app_path.parent, ".app-update-"
+            )
+            temporary_icon_path = self._stage_update_asset(
+                icon_source, APP_ICON_PATH.parent, ".icon-update-"
+            )
             self.events.put(
-                ("update_download_complete", version, str(temporary_path), None)
+                (
+                    "update_download_complete",
+                    version,
+                    str(temporary_app_path),
+                    str(temporary_icon_path),
+                    None,
+                )
             )
         except (
             urllib.error.HTTPError,
@@ -1815,21 +1860,33 @@ class AssemblyWorkbench:
             ValueError,
         ) as exc:
             error = str(exc)
-            if temporary_path is not None:
+            for temporary_path in (temporary_app_path, temporary_icon_path):
+                if temporary_path is None:
+                    continue
                 try:
                     temporary_path.unlink()
                 except FileNotFoundError:
                     pass
                 except OSError as cleanup_error:
                     error += f"\nCould not remove temporary update file: {cleanup_error}"
-            self.events.put(("update_download_complete", version, None, error))
+            self.events.put(
+                ("update_download_complete", version, None, None, error)
+            )
 
     def _handle_update_download_complete(
-        self, version: str, temporary_path: str | None, error: str | None
+        self,
+        version: str,
+        temporary_app_path: str | None,
+        temporary_icon_path: str | None,
+        error: str | None,
     ) -> None:
         self.update_in_progress = False
         self.update_button.configure(state=tk.NORMAL)
-        if error is not None or temporary_path is None:
+        if (
+            error is not None
+            or temporary_app_path is None
+            or temporary_icon_path is None
+        ):
             self.status.configure(text="Update download failed")
             messagebox.showerror(
                 "Update download failed",
@@ -1837,20 +1894,54 @@ class AssemblyWorkbench:
                 parent=self.root,
             )
             return
-        self._apply_update(Path(temporary_path), version)
+        self._apply_update(
+            Path(temporary_app_path), Path(temporary_icon_path), version
+        )
 
-    def _apply_update(self, temporary_path: Path, version: str) -> None:
+    @staticmethod
+    def _verify_update_asset(data: bytes, checksum_data: bytes, name: str) -> None:
+        expected_checksum = checksum_data.decode("ascii").strip()
+        if re.fullmatch(r"[0-9a-f]{64}", expected_checksum) is None:
+            raise ValueError(f"The release contains an invalid checksum for {name}")
+        if hashlib.sha256(data).hexdigest() != expected_checksum:
+            raise ValueError(f"The downloaded {name} failed its SHA-256 check")
+
+    @staticmethod
+    def _stage_update_asset(data: bytes, directory: Path, prefix: str) -> Path:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            prefix=prefix,
+            suffix=".tmp",
+            dir=directory,
+            delete=False,
+        ) as update_file:
+            temporary_path = Path(update_file.name)
+            update_file.write(data)
+            update_file.flush()
+            os.fsync(update_file.fileno())
+        return temporary_path
+
+    def _apply_update(
+        self,
+        temporary_app_path: Path,
+        temporary_icon_path: Path,
+        version: str,
+    ) -> None:
         if self.is_dirty:
             choice = self._confirm_close()
             if choice == "cancel":
-                self._remove_temporary_update(temporary_path)
+                self._remove_temporary_update(
+                    temporary_app_path, temporary_icon_path
+                )
                 self.status.configure(text="Update cancelled")
                 return
             if choice == "save" and not self.save_file():
-                self._remove_temporary_update(temporary_path)
+                self._remove_temporary_update(
+                    temporary_app_path, temporary_icon_path
+                )
                 return
         if not self._save_preferences():
-            self._remove_temporary_update(temporary_path)
+            self._remove_temporary_update(temporary_app_path, temporary_icon_path)
             messagebox.showerror(
                 "Update failed",
                 "Could not save settings; the update was not installed.",
@@ -1861,9 +1952,11 @@ class AssemblyWorkbench:
         self.stop_execution()
         app_path = Path(__file__).resolve()
         try:
-            os.replace(temporary_path, app_path)
+            APP_ICON_PATH.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(temporary_icon_path, APP_ICON_PATH)
+            os.replace(temporary_app_path, app_path)
         except OSError as exc:
-            self._remove_temporary_update(temporary_path)
+            self._remove_temporary_update(temporary_app_path, temporary_icon_path)
             self.status.configure(text="Could not install update")
             messagebox.showerror("Update failed", str(exc), parent=self.root)
             return
@@ -1880,16 +1973,17 @@ class AssemblyWorkbench:
                 parent=self.root,
             )
 
-    def _remove_temporary_update(self, path: Path) -> None:
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError as exc:
-            self._append(
-                self.debug_output,
-                f"Could not remove temporary update file {path}: {exc}\n",
-            )
+    def _remove_temporary_update(self, *paths: Path) -> None:
+        for path in paths:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                self._append(
+                    self.debug_output,
+                    f"Could not remove temporary update file {path}: {exc}\n",
+                )
 
     def _start_reader(self, proc: subprocess.Popen[str], name: str) -> None:
         if proc.stdout is None:
