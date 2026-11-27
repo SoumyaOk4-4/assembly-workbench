@@ -31,7 +31,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 AUTOSAVE_DELAY_MS = 800
 RECENT_FILE_LIMIT = 10
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 UPDATE_API_URL = "https://api.github.com/repos/SoumyaOk4-4/assembly-workbench/releases/latest"
 UPDATE_DOWNLOAD_PREFIX = (
     "https://github.com/SoumyaOk4-4/assembly-workbench/releases/download/"
@@ -348,7 +348,6 @@ class AssemblyWorkbench:
         self.path_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=8)
 
         main = ttk.Panedwindow(self.root, orient=tk.HORIZONTAL)
-        main.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
 
         editor_frame = ttk.Frame(main)
         editor_header = ttk.Frame(editor_frame, padding=(4, 3))
@@ -555,6 +554,7 @@ class AssemblyWorkbench:
         self.github_source_label.bind("<Button-1>", self._open_github_source)
         self.github_source_label.bind("<Return>", self._open_github_source)
         self.github_source_label.bind("<space>", self._open_github_source)
+        main.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
 
     def _open_github_source(self, _event: tk.Event | None = None) -> None:
         try:
