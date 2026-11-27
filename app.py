@@ -29,7 +29,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 AUTOSAVE_DELAY_MS = 800
 RECENT_FILE_LIMIT = 10
-APP_VERSION = "0.1.3"
+APP_VERSION = "0.1.4"
 UPDATE_API_URL = "https://api.github.com/repos/SoumyaOk4-4/assembly-workbench/releases/latest"
 UPDATE_DOWNLOAD_PREFIX = (
     "https://github.com/SoumyaOk4-4/assembly-workbench/releases/download/"
@@ -125,6 +125,8 @@ TARGETS = {
         "assembler_args": (),
         "linker": "aarch64-linux-gnu-ld",
         "linker_args": (),
+        "libc_compiler": "aarch64-linux-gnu-gcc",
+        "libc_compiler_args": ("-static",),
         "qemu": "qemu-aarch64",
         "stack_pointer": "$sp",
     },
@@ -133,6 +135,8 @@ TARGETS = {
         "assembler_args": (),
         "linker": "arm-linux-gnueabihf-ld",
         "linker_args": (),
+        "libc_compiler": "arm-linux-gnueabihf-gcc",
+        "libc_compiler_args": ("-static",),
         "qemu": "qemu-arm",
         "stack_pointer": "$sp",
     },
@@ -141,6 +145,8 @@ TARGETS = {
         "assembler_args": ("--32",),
         "linker": "ld",
         "linker_args": ("-m", "elf_i386"),
+        "libc_compiler": "gcc",
+        "libc_compiler_args": ("-m32", "-static"),
         "qemu": "qemu-i386",
         "stack_pointer": "$esp",
     },
@@ -149,6 +155,8 @@ TARGETS = {
         "assembler_args": ("--64",),
         "linker": "ld",
         "linker_args": ("-m", "elf_x86_64"),
+        "libc_compiler": "gcc",
+        "libc_compiler_args": ("-static",),
         "qemu": "qemu-x86_64",
         "stack_pointer": "$rsp",
     },
@@ -223,6 +231,9 @@ class AssemblyWorkbench:
         self.target_name = preferences.get("target", "AArch64")
         if not isinstance(self.target_name, str) or self.target_name not in TARGETS:
             self.target_name = "AArch64"
+        self.link_libc_setting = preferences.get("link_libc", False)
+        if not isinstance(self.link_libc_setting, bool):
+            self.link_libc_setting = False
         self.window_geometry = preferences.get("window_geometry", "1280x820")
         if (
             not isinstance(self.window_geometry, str)
@@ -323,6 +334,13 @@ class AssemblyWorkbench:
         )
         target_picker.pack(side=tk.LEFT, padx=(0, 5))
         target_picker.bind("<<ComboboxSelected>>", self._change_target)
+        self.link_libc_var = tk.BooleanVar(value=self.link_libc_setting)
+        ttk.Checkbutton(
+            toolbar,
+            text="Link with libc",
+            variable=self.link_libc_var,
+            command=self._save_preferences,
+        ).pack(side=tk.LEFT, padx=(4, 8))
         self.path_label = ttk.Label(toolbar, text="", anchor=tk.W)
         self.path_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=8)
 
@@ -974,6 +992,17 @@ class AssemblyWorkbench:
             padding=(8, 5),
             relief="flat",
         )
+        style.configure(
+            "TCheckbutton",
+            background=self.colors["background"],
+            foreground=self.colors["foreground"],
+            padding=(3, 0),
+        )
+        style.map(
+            "TCheckbutton",
+            background=[("active", self.colors["background"])],
+            foreground=[("disabled", self.colors["muted"])],
+        )
         style.map(
             "TButton",
             background=[
@@ -1164,6 +1193,7 @@ class AssemblyWorkbench:
             font_size=self.font_size,
             indent_width=int(self.indent_width.get()),
             target=self.target_name,
+            link_libc=self.link_libc_var.get(),
             register_filter=self.register_filter.get(),
             recent_files=self.recent_files[:RECENT_FILE_LIMIT],
             last_file=str(self.source_path) if self.source_path else self.last_file,
@@ -1733,14 +1763,32 @@ class AssemblyWorkbench:
         self.binary_path = binary
         target_name = self.target_name
         target = TARGETS[target_name]
-        self._append(
-            self.build_output,
-            f"$ {target['assembler']} {' '.join(target['assembler_args'])} -g {source.name} -o {obj.name}\n",
-        )
+        link_libc = self.link_libc_var.get()
+        if link_libc:
+            compiler = str(target["libc_compiler"])
+            compiler_args = tuple(target["libc_compiler_args"])
+            command = " ".join(
+                (compiler, *compiler_args, "-g", source.name, "-o", binary.name)
+            )
+        else:
+            command = (
+                f"{target['assembler']} {' '.join(target['assembler_args'])} "
+                f"-g {source.name} -o {obj.name}"
+            )
+        self._append(self.build_output, f"$ {command}\n")
         self.status.configure(text="Assembling and linking…" if not run_after else "Building before run…")
         threading.Thread(
             target=self._build_worker,
-            args=(source, obj, binary, debug_after, run_after, target_name, target),
+            args=(
+                source,
+                obj,
+                binary,
+                debug_after,
+                run_after,
+                target_name,
+                target,
+                link_libc,
+            ),
             daemon=True,
         ).start()
 
@@ -1753,9 +1801,46 @@ class AssemblyWorkbench:
         run_after: bool,
         target_name: str,
         target: dict[str, str | tuple[str, ...]],
+        link_libc: bool,
     ) -> None:
         output: list[str] = []
         try:
+            if link_libc:
+                compiler = str(target["libc_compiler"])
+                compiler_args = tuple(target["libc_compiler_args"])
+                compile_result = subprocess.run(
+                    [
+                        compiler,
+                        *compiler_args,
+                        "-g",
+                        str(source),
+                        "-o",
+                        str(binary),
+                    ],
+                    cwd=source.parent,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+                output.extend(
+                    part
+                    for part in (compile_result.stdout, compile_result.stderr)
+                    if part
+                )
+                self.events.put(
+                    (
+                        "build_done",
+                        compile_result.returncode == 0,
+                        "".join(output),
+                        debug_after,
+                        run_after,
+                        binary,
+                        target_name,
+                    )
+                )
+                return
+
             assembler = str(target["assembler"])
             assembler_args = tuple(target["assembler_args"])
             linker = str(target["linker"])

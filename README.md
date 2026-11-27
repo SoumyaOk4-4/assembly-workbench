@@ -55,6 +55,14 @@ sudo apt install python3 python3-tk binutils binutils-aarch64-linux-gnu \
   binutils-arm-linux-gnueabihf gdb-multiarch qemu-user
 ```
 
+For assembly that calls libc functions such as `printf`, also install the
+matching GCC toolchain:
+
+```sh
+sudo apt install gcc-multilib gcc-aarch64-linux-gnu \
+  gcc-arm-linux-gnueabihf
+```
+
 ### Launch
 
 Download and extract the [latest release](https://github.com/SoumyaOk4-4/assembly-workbench/releases/latest), then run:
@@ -81,6 +89,12 @@ preferences.
 | **Run** | Builds and executes the program under QEMU. |
 | **Build + Debug** | Starts QEMU and GDB for instruction-level debugging. |
 | **Step** | Advances one machine instruction. |
+
+Select **Link with libc** before building to link the source through the
+target's GCC driver with static libc. This supports standard library calls
+without changing the existing system-call assembly build mode. For AArch64,
+function arguments are passed in `x0`–`x7`; load each function's arguments
+before its `bl` call, and preserve `x30` if `main` returns normally.
 
 Click the editor gutter to toggle source breakpoints. While debugging, the
 register panel shows values and condition flags; the Memory inspector reads
