@@ -33,6 +33,8 @@
   inspect registers, memory, stack words, and disassembly.
 - **Customize** the editor with Light, Dark, Yellow, and Pink themes, plus
   adjustable fonts and tab width.
+- **Use the Terminal** to run shell commands in the workbench, create multiple
+  terminal sessions, and split them side-by-side or stacked.
 - **Update** from the app with **Check Updates**.
 
 ## Get started
@@ -104,6 +106,15 @@ $XDG_CONFIG_HOME/aarch64-assembly-workbench/settings.json
 
 If `XDG_CONFIG_HOME` is not set, the default location is
 `~/.config/aarch64-assembly-workbench/settings.json`.
+
+### Terminal
+
+Open the **Terminal** tab in the output panel to use the configured interactive
+shell (Bash by default).
+Use **New Terminal** to add a session, **Split Right** or **Split Down** to
+choose the split direction, and **Close Terminal** to stop the active session.
+ANSI styling is not rendered, and full-screen terminal applications that
+require advanced cursor control are not supported.
 
 ### Keyboard shortcuts
 

@@ -4,20 +4,25 @@
 from __future__ import annotations
 
 import codecs
+import fcntl
 import io
 import json
 import os
+import pty
 import queue
 import re
 import socket
 import subprocess
+import struct
 import sys
 import tempfile
+import termios
 import threading
 import tkinter as tk
 import urllib.error
 import urllib.request
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
@@ -178,6 +183,16 @@ def read_settings(path: Path) -> tuple[dict, str | None]:
     return value, None
 
 
+@dataclass
+class TerminalSession:
+    session_id: int
+    frame: ttk.Frame
+    output: tk.Text
+    process: subprocess.Popen[bytes] | None
+    master_fd: int | None
+    pending_output: str = ""
+
+
 class AssemblyWorkbench:
     def __init__(
         self, root: tk.Tk, source: Path, preferences_path: Path | None = None
@@ -242,6 +257,9 @@ class AssemblyWorkbench:
         self.is_dirty = False
         self.highlight_id: str | None = None
         self.closed = False
+        self.terminal_sessions: dict[int, TerminalSession] = {}
+        self.active_terminal_id: int | None = None
+        self.next_terminal_id = 1
 
         self.root.title("AArch64 Assembly Workbench")
         self.app_icon = tk.PhotoImage(file=str(APP_ICON_PATH))
@@ -487,6 +505,7 @@ class AssemblyWorkbench:
         self.program_output = self._add_output_tab("Program")
         self.debug_output = self._add_output_tab("Debugger")
         self.disassembly_output = self._add_output_tab("Disassembly")
+        self._build_terminal_tab()
         self.output_tabs.pack(fill=tk.BOTH, expand=True)
         right.add(output_frame, weight=2)
 
@@ -501,6 +520,431 @@ class AssemblyWorkbench:
             anchor=tk.CENTER,
             padding=(8, 2),
         ).pack(side=tk.BOTTOM, fill=tk.X)
+
+    def _build_terminal_tab(self) -> None:
+        terminal_frame = ttk.Frame(self.output_tabs)
+        controls = ttk.Frame(terminal_frame, padding=(4, 3))
+        controls.pack(side=tk.TOP, fill=tk.X)
+        ttk.Button(
+            controls, text="New Terminal", command=self._new_terminal
+        ).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(
+            controls,
+            text="Split Right",
+            command=lambda: self._split_terminal(tk.HORIZONTAL),
+        ).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(
+            controls,
+            text="Split Down",
+            command=lambda: self._split_terminal(tk.VERTICAL),
+        ).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(
+            controls, text="Close Terminal", command=self._close_active_terminal
+        ).pack(side=tk.LEFT)
+        self.terminal_host = terminal_frame
+        self.terminal_orientation = tk.HORIZONTAL
+        self.terminal_panes = ttk.Panedwindow(
+            self.terminal_host, orient=self.terminal_orientation
+        )
+        self.terminal_panes.pack(fill=tk.BOTH, expand=True)
+        self.output_tabs.add(terminal_frame, text="Terminal")
+        self._new_terminal(focus=False)
+
+    def _create_terminal_pane(
+        self, session_id: int
+    ) -> tuple[ttk.Frame, tk.Text]:
+        pane = ttk.Frame(self.terminal_panes)
+        heading = ttk.Frame(pane, padding=(4, 2))
+        heading.pack(side=tk.TOP, fill=tk.X)
+        ttk.Label(heading, text=f"Terminal {session_id}").pack(side=tk.LEFT)
+        output = tk.Text(
+            pane,
+            wrap=tk.NONE,
+            font=(self.font_family, max(8, self.font_size - 2)),
+            padx=6,
+            pady=4,
+            undo=False,
+        )
+        output.configure(
+            background=self.colors["editor"],
+            foreground=self.colors["foreground"],
+            insertbackground=self.colors["foreground"],
+            selectbackground=self.colors["selection"],
+            highlightthickness=1,
+            highlightbackground=self.colors["panel"],
+            highlightcolor=self.colors["register"],
+            borderwidth=0,
+        )
+        scrollbar = ttk.Scrollbar(pane, orient=tk.VERTICAL, command=output.yview)
+        output.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        output.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        output.bind(
+            "<KeyPress>",
+            lambda event, key=session_id: self._terminal_key(key, event),
+        )
+        output.bind(
+            "<FocusIn>",
+            lambda _event, key=session_id: self._set_active_terminal(key),
+        )
+        output.bind(
+            "<Configure>",
+            lambda _event, key=session_id: self._resize_terminal(key),
+        )
+        return pane, output
+
+    def _new_terminal(self, focus: bool = True) -> None:
+        session_id = self.next_terminal_id
+        self.next_terminal_id += 1
+        process: subprocess.Popen[bytes] | None = None
+        master_fd: int | None = None
+        startup_error: OSError | None = None
+        try:
+            master_fd, slave_fd = pty.openpty()
+            shell = os.environ.get("SHELL", "/bin/bash")
+            environment = os.environ.copy()
+            environment["TERM"] = "xterm-256color"
+            try:
+                process = subprocess.Popen(
+                    [shell],
+                    stdin=slave_fd,
+                    stdout=slave_fd,
+                    stderr=slave_fd,
+                    cwd=(
+                        self.source_path.parent
+                        if self.source_path is not None
+                        else os.getcwd()
+                    ),
+                    env=environment,
+                    start_new_session=True,
+                    close_fds=True,
+                )
+            finally:
+                os.close(slave_fd)
+        except OSError as exc:
+            startup_error = exc
+            if master_fd is not None:
+                os.close(master_fd)
+                master_fd = None
+        pane, output = self._create_terminal_pane(session_id)
+        if startup_error is not None:
+            output.insert(tk.END, f"Could not start terminal: {startup_error}\n")
+
+        session = TerminalSession(session_id, pane, output, process, master_fd)
+        self.terminal_sessions[session_id] = session
+        self.terminal_panes.add(pane, weight=1)
+        self._set_active_terminal(session_id)
+        if process is not None and master_fd is not None:
+            threading.Thread(
+                target=self._read_terminal_output,
+                args=(session_id, master_fd, process),
+                daemon=True,
+            ).start()
+        if focus:
+            output.focus_set()
+
+    def _split_terminal(self, orientation: str) -> None:
+        if orientation != self.terminal_orientation:
+            self._rebuild_terminal_panes(orientation)
+        self._new_terminal()
+
+    def _rebuild_terminal_panes(self, orientation: str) -> None:
+        transcripts = {
+            session_id: (
+                session.output.get("1.0", "end-1c"),
+                session.output.index(tk.INSERT),
+            )
+            for session_id, session in self.terminal_sessions.items()
+        }
+        for session in self.terminal_sessions.values():
+            session.frame.destroy()
+        self.terminal_panes.destroy()
+        self.terminal_orientation = orientation
+        self.terminal_panes = ttk.Panedwindow(
+            self.terminal_host, orient=self.terminal_orientation
+        )
+        self.terminal_panes.pack(fill=tk.BOTH, expand=True)
+        for session_id, session in self.terminal_sessions.items():
+            session.frame, session.output = self._create_terminal_pane(session_id)
+            transcript, cursor = transcripts[session_id]
+            session.output.insert(tk.END, transcript)
+            session.output.mark_set(tk.INSERT, cursor)
+            self.terminal_panes.add(session.frame, weight=1)
+            self._resize_terminal(session_id)
+
+    def _set_active_terminal(self, session_id: int) -> None:
+        if session_id in self.terminal_sessions:
+            self.active_terminal_id = session_id
+
+    def _close_active_terminal(self) -> None:
+        session_id = self.active_terminal_id
+        if session_id is None:
+            return
+        session = self.terminal_sessions.pop(session_id, None)
+        if session is None:
+            return
+        self.terminal_panes.remove(session.frame)
+        if session.process is not None and session.process.poll() is None:
+            try:
+                os.killpg(session.process.pid, 15)
+            except OSError as exc:
+                self.status.configure(text=f"Could not stop terminal: {exc}")
+        if session.master_fd is not None:
+            try:
+                os.close(session.master_fd)
+            except OSError:
+                pass
+        self.active_terminal_id = next(iter(self.terminal_sessions), None)
+        if self.active_terminal_id is not None:
+            self.terminal_sessions[self.active_terminal_id].output.focus_set()
+
+    def _terminal_key(self, session_id: int, event: tk.Event) -> str:
+        session = self.terminal_sessions.get(session_id)
+        if session is None or session.master_fd is None:
+            return "break"
+        control = bool(event.state & 0x4)
+        shift = bool(event.state & 0x1)
+        if control and event.keysym.lower() == "c" and shift:
+            try:
+                selected = session.output.get(tk.SEL_FIRST, tk.SEL_LAST)
+            except tk.TclError:
+                return "break"
+            self.root.clipboard_clear()
+            self.root.clipboard_append(selected)
+            return "break"
+        if control and event.keysym.lower() == "v":
+            try:
+                data = self.root.clipboard_get().encode("utf-8")
+            except tk.TclError:
+                return "break"
+        else:
+            key_sequences = {
+                "Return": b"\r",
+                "BackSpace": b"\x7f",
+                "Tab": b"\t",
+                "Escape": b"\x1b",
+                "Up": b"\x1b[A",
+                "Down": b"\x1b[B",
+                "Right": b"\x1b[C",
+                "Left": b"\x1b[D",
+                "Home": b"\x1b[H",
+                "End": b"\x1b[F",
+                "Delete": b"\x1b[3~",
+                "Prior": b"\x1b[5~",
+                "Next": b"\x1b[6~",
+            }
+            if control and event.keysym.lower() in "abcdefghijklmnopqrstuvwxyz":
+                data = bytes([ord(event.keysym.lower()) - ord("a") + 1])
+            elif event.keysym in key_sequences:
+                data = key_sequences[event.keysym]
+            elif event.char:
+                data = event.char.encode("utf-8")
+            else:
+                return "break"
+        try:
+            os.write(session.master_fd, data)
+        except OSError as exc:
+            self.status.configure(text=f"Terminal input failed: {exc}")
+        return "break"
+
+    def _resize_terminal(self, session_id: int) -> None:
+        session = self.terminal_sessions.get(session_id)
+        if session is None or session.master_fd is None:
+            return
+        width = max(1, session.output.winfo_width())
+        height = max(1, session.output.winfo_height())
+        font = session.output.cget("font")
+        try:
+            font_metrics = self.root.tk.call("font", "metrics", font, "-linespace")
+            char_width = self.root.tk.call("font", "measure", font, "0")
+            rows = max(1, height // int(font_metrics))
+            columns = max(1, width // int(char_width))
+            fcntl.ioctl(
+                session.master_fd,
+                termios.TIOCSWINSZ,
+                struct.pack("HHHH", rows, columns, 0, 0),
+            )
+        except (OSError, tk.TclError, ValueError):
+            return
+
+    def _read_terminal_output(
+        self, session_id: int, master_fd: int, process: subprocess.Popen[bytes]
+    ) -> None:
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        try:
+            while True:
+                data = os.read(master_fd, 4096)
+                if not data:
+                    break
+                self.events.put(("terminal_output", session_id, decoder.decode(data)))
+            remainder = decoder.decode(b"", final=True)
+            if remainder:
+                self.events.put(("terminal_output", session_id, remainder))
+        except OSError:
+            pass
+        return_code = process.wait()
+        self.events.put(("terminal_done", session_id, return_code))
+
+    def _append_terminal_output(self, session_id: int, value: str) -> None:
+        session = self.terminal_sessions.get(session_id)
+        if session is None:
+            return
+        value = session.pending_output + value
+        session.pending_output = ""
+        index = 0
+        while index < len(value):
+            character = value[index]
+            if character == "\x1b":
+                if index + 1 >= len(value):
+                    session.pending_output = value[index:]
+                    break
+                if value[index + 1] == "[":
+                    end = index + 2
+                    while end < len(value) and not "@" <= value[end] <= "~":
+                        end += 1
+                    if end == len(value):
+                        session.pending_output = value[index:]
+                        break
+                    self._handle_terminal_csi(
+                        session, value[index + 2 : end], value[end]
+                    )
+                    index = end + 1
+                    continue
+                if value[index + 1] == "]":
+                    end = index + 2
+                    while end < len(value):
+                        if value[end] == "\x07":
+                            break
+                        if value[end] == "\x1b" and end + 1 < len(value) and value[end + 1] == "\\":
+                            end += 1
+                            break
+                        end += 1
+                    if end >= len(value):
+                        session.pending_output = value[index:]
+                        break
+                    index = end + 1
+                    continue
+                index += 2
+                continue
+            if character == "\r":
+                if index + 1 < len(value) and value[index + 1] == "\n":
+                    session.output.mark_set(tk.INSERT, f"{tk.INSERT} lineend")
+                else:
+                    session.output.mark_set(tk.INSERT, f"{tk.INSERT} linestart")
+            elif character == "\n":
+                self._write_terminal_character(session, "\n")
+            elif character == "\b":
+                self._move_terminal_cursor(session, "D", 1)
+            elif character == "\t" or ord(character) >= 32:
+                self._write_terminal_character(session, character)
+            index += 1
+        session.output.see(tk.INSERT)
+
+    def _handle_terminal_csi(
+        self, session: TerminalSession, parameters: str, command: str
+    ) -> None:
+        output = session.output
+        if parameters.startswith("?"):
+            return
+        values = [
+            int(value) if value.isdigit() else 0
+            for value in parameters.split(";")
+        ] if parameters else []
+
+        def amount(position: int = 0) -> int:
+            return values[position] if position < len(values) and values[position] else 1
+
+        if command in ("A", "B", "C", "D", "E", "F", "G", "H", "f", "d"):
+            self._move_terminal_cursor(session, command, amount(), values)
+        elif command == "J":
+            mode = values[0] if values else 0
+            cursor = output.index(tk.INSERT)
+            if mode == 2 or mode == 3:
+                output.delete("1.0", tk.END)
+                output.mark_set(tk.INSERT, "1.0")
+            elif mode == 0:
+                output.delete(cursor, "end-1c")
+            elif mode == 1:
+                output.delete("1.0", cursor)
+        elif command == "K":
+            mode = values[0] if values else 0
+            cursor = output.index(tk.INSERT)
+            line_start = f"{cursor} linestart"
+            line_end = f"{cursor} lineend"
+            if mode == 0:
+                output.delete(cursor, line_end)
+            elif mode == 1:
+                output.delete(line_start, cursor)
+            elif mode == 2:
+                output.delete(line_start, line_end)
+                output.mark_set(tk.INSERT, line_start)
+        elif command in ("P", "X"):
+            cursor = output.index(tk.INSERT)
+            line_end = f"{cursor} lineend"
+            end = output.index(f"{cursor} + {amount()} chars")
+            if output.compare(end, ">", line_end):
+                end = line_end
+            if command == "X":
+                counted = output.count(cursor, end, "chars")
+                count = max(0, int(counted[0])) if counted else 0
+                output.delete(cursor, end)
+                output.insert(cursor, " " * count)
+                output.mark_set(tk.INSERT, cursor)
+            else:
+                output.delete(cursor, end)
+        elif command == "@":
+            cursor = output.index(tk.INSERT)
+            output.insert(cursor, " " * amount())
+            output.mark_set(tk.INSERT, cursor)
+
+    def _move_terminal_cursor(
+        self,
+        session: TerminalSession,
+        command: str,
+        amount: int,
+        values: list[int] | None = None,
+    ) -> None:
+        output = session.output
+        line, column = (int(part) for part in output.index(tk.INSERT).split("."))
+        line_count = int(output.index("end-1c").split(".")[0])
+        values = values or []
+        if command == "A":
+            line = max(1, line - amount)
+        elif command in ("B", "E"):
+            line = min(line_count, line + amount)
+            if command == "E":
+                column = 0
+        elif command == "F":
+            line = max(1, line - amount)
+            column = 0
+        elif command in ("G",):
+            column = max(0, amount - 1)
+        elif command in ("H", "f"):
+            line = min(line_count, max(1, amount))
+            column = max(0, (values[1] if len(values) > 1 and values[1] else 1) - 1)
+        elif command == "d":
+            line = min(line_count, max(1, amount))
+        elif command == "C":
+            column += amount
+        elif command == "D":
+            column = max(0, column - amount)
+        line_start = f"{line}.0"
+        line_length = int(output.count(line_start, f"{line}.end", "chars")[0])
+        output.mark_set(tk.INSERT, f"{line}.{min(column, line_length)}")
+
+    @staticmethod
+    def _write_terminal_character(session: TerminalSession, character: str) -> None:
+        output = session.output
+        cursor = output.index(tk.INSERT)
+        next_character = output.index(f"{cursor} + 1 chars")
+        if (
+            output.compare(cursor, "<", "end-1c")
+            and output.get(cursor, next_character) != "\n"
+            and character != "\n"
+        ):
+            output.delete(cursor, next_character)
+        output.insert(cursor, character)
+        output.mark_set(tk.INSERT, f"{cursor} + {len(character)} chars")
 
     def _add_output_tab(self, title: str) -> tk.Text:
         frame = ttk.Frame(self.output_tabs)
@@ -656,6 +1100,7 @@ class AssemblyWorkbench:
             self.program_output,
             self.debug_output,
             self.disassembly_output,
+            *(session.output for session in self.terminal_sessions.values()),
         ):
             widget.configure(
                 background=self.colors["editor"],
@@ -691,6 +1136,7 @@ class AssemblyWorkbench:
             self.program_output,
             self.debug_output,
             self.disassembly_output,
+            *(session.output for session in self.terminal_sessions.values()),
         ):
             widget.configure(font=output_font)
         self._draw_line_numbers()
@@ -1685,6 +2131,20 @@ class AssemblyWorkbench:
                     self.runner = None
                     self._append(self.program_output, f"\nProgram exited with status {return_code}\n")
                     self.status.configure(text=f"Program exited with status {return_code}")
+            elif kind == "terminal_output":
+                _, session_id, output = event
+                self._append_terminal_output(session_id, output)
+            elif kind == "terminal_done":
+                _, session_id, return_code = event
+                session = self.terminal_sessions.get(session_id)
+                if session is not None:
+                    session.process = None
+                    if session.master_fd is not None:
+                        os.close(session.master_fd)
+                    session.master_fd = None
+                    self._append_terminal_output(
+                        session_id, f"\n[Terminal exited with status {return_code}]\n"
+                    )
             elif kind == "update_check_complete":
                 _, version, package_url, error = event
                 self._handle_update_check_complete(
@@ -2432,6 +2892,9 @@ class AssemblyWorkbench:
             self.highlight_id = None
         self.closed = True
         self.stop_execution()
+        while self.terminal_sessions:
+            self.active_terminal_id = next(iter(self.terminal_sessions))
+            self._close_active_terminal()
         self._save_preferences()
         self.root.destroy()
 
