@@ -21,19 +21,22 @@ import threading
 import tkinter as tk
 import urllib.error
 import urllib.request
+import webbrowser
 import zipfile
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 
 AUTOSAVE_DELAY_MS = 800
 RECENT_FILE_LIMIT = 10
-APP_VERSION = "0.1.4"
+APP_VERSION = "1.0.0"
 UPDATE_API_URL = "https://api.github.com/repos/SoumyaOk4-4/assembly-workbench/releases/latest"
 UPDATE_DOWNLOAD_PREFIX = (
     "https://github.com/SoumyaOk4-4/assembly-workbench/releases/download/"
 )
+GITHUB_SOURCE_URL = "https://github.com/SoumyaOk4-4/assembly-workbench"
 MAX_UPDATE_FILE_BYTES = 2 * 1024 * 1024
 APP_ICON_PATH = Path(__file__).resolve().with_name("assets") / "app-icon.png"
 FONT_FAMILIES = ("monospace", "DejaVu Sans Mono", "Liberation Mono", "Courier New")
@@ -532,12 +535,43 @@ class AssemblyWorkbench:
 
         self.status = ttk.Label(self.root, text="Ready", anchor=tk.W, padding=(8, 4))
         self.status.pack(side=tk.BOTTOM, fill=tk.X)
+        footer = ttk.Frame(self.root, padding=(8, 2))
+        footer.pack(side=tk.BOTTOM, fill=tk.X)
+        footer.columnconfigure(1, weight=1)
         ttk.Label(
-            self.root,
-            text="made with love by moshi",
-            anchor=tk.CENTER,
-            padding=(8, 2),
-        ).pack(side=tk.BOTTOM, fill=tk.X)
+            footer, text=f"© {date.today().year} moshi", anchor=tk.W
+        ).grid(row=0, column=0, sticky=tk.W)
+        ttk.Label(
+            footer, text="made with love by moshi", anchor=tk.CENTER
+        ).grid(row=0, column=1, sticky=tk.EW)
+        self.github_source_label = ttk.Label(
+            footer,
+            text="GitHub source",
+            cursor="hand2",
+            style="SourceLink.TLabel",
+            takefocus=True,
+        )
+        self.github_source_label.grid(row=0, column=2, sticky=tk.E)
+        self.github_source_label.bind("<Button-1>", self._open_github_source)
+        self.github_source_label.bind("<Return>", self._open_github_source)
+        self.github_source_label.bind("<space>", self._open_github_source)
+
+    def _open_github_source(self, _event: tk.Event | None = None) -> None:
+        try:
+            opened = webbrowser.open(GITHUB_SOURCE_URL)
+        except (OSError, webbrowser.Error) as exc:
+            messagebox.showerror(
+                "Could not open GitHub source",
+                f"Could not open {GITHUB_SOURCE_URL}: {exc}",
+                parent=self.root,
+            )
+            return
+        if not opened:
+            messagebox.showerror(
+                "Could not open GitHub source",
+                f"Could not open {GITHUB_SOURCE_URL}.",
+                parent=self.root,
+            )
 
     def _build_terminal_tab(self) -> None:
         terminal_frame = ttk.Frame(self.output_tabs)
@@ -984,6 +1018,16 @@ class AssemblyWorkbench:
         style.theme_use("clam")
         style.configure("TFrame", background=self.colors["background"])
         style.configure("TLabel", background=self.colors["background"], foreground=self.colors["foreground"])
+        style.configure(
+            "SourceLink.TLabel",
+            background=self.colors["background"],
+            foreground=self.colors["register"],
+            underline=True,
+        )
+        style.map(
+            "SourceLink.TLabel",
+            foreground=[("active", self.colors["instruction"])],
+        )
         style.configure(
             "TButton",
             background=self.colors["panel"],
